@@ -1,0 +1,24 @@
+# ESP-IDF and ESP Board Manager
+/build/
+/build-*/
+/managed_components/
+/components/gen_bmgr_codes/
+/sdkconfig
+/sdkconfig.old
+/eim_config.toml
+
+# Local Agentic Harness workspace
+/.agent-harness/
+
+# Python caches
+__pycache__/
+*.py[cod]
+
+# Local credentials and NVS exports
+.env
+.env.*
+/secrets/
+/credentials/
+credentials.csv
+dash_keys.bin
+energy_keys.bin
