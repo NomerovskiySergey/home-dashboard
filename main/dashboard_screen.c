@@ -1,29 +1,42 @@
 #include "dashboard_screen.h"
 
 #include <stdbool.h>
+#include <stdio.h>
+#include <string.h>
 #include <time.h>
 
 #include "assets/ukraine_map_data.h"
 #include "dashboard_data.h"
+#include "dashboard_display_mode.h"
 #include "dashboard_wifi.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "nvs.h"
 
 enum {
     SCREEN_WIDTH = 480,
     MARGIN = 16,
     CARD_WIDTH = SCREEN_WIDTH - MARGIN * 2,
     MINUTES_PER_DAY = 24 * 60,
+    DNIPRO_REGION = 12,
+    SETTING_NIGHT = 1 << 0,
+    SETTING_ECO = 1 << 1,
+    SETTING_ALERT_WAKE = 1 << 2,
 };
 
 static const uint32_t background = 0x101820;
 static const uint32_t panel = 0x1B2632;
+static const uint32_t night_background = 0x070A0F;
+static const uint32_t night_panel = 0x101820;
 static const uint32_t text_color = 0xF4F7FA;
 static const uint32_t muted = 0xAFBECC;
 static const uint32_t warm = 0xF8C576;
 static const uint32_t alarm = 0xE87A74;
 static const uint32_t blue = 0xA8CFEC;
+static const char display_settings_namespace[] = "dash_display";
+_Static_assert(sizeof(display_settings_namespace) <= NVS_NS_NAME_MAX_SIZE,
+               "Display settings namespace exceeds the NVS limit");
 
 extern const uint8_t ubuntu_medium_start[] asm("_binary_Ubuntu_Medium_ttf_start");
 extern const uint8_t ubuntu_medium_end[] asm("_binary_Ubuntu_Medium_ttf_end");
@@ -36,6 +49,8 @@ static lv_obj_t *home_clock;
 static lv_obj_t *home_wifi_status;
 static lv_obj_t *schedule_screen;
 static lv_obj_t *wifi_screen;
+static lv_obj_t *display_settings_screen;
+static lv_obj_t *display_settings_note;
 static lv_obj_t *wifi_status;
 static lv_obj_t *wifi_instructions;
 static lv_obj_t *wifi_change_button;
@@ -54,6 +69,13 @@ static lv_obj_t *energy_detail_note;
 static lv_obj_t *energy_detail_age;
 static lv_obj_t *energy_intervals;
 static bool energy_show_tomorrow;
+static lv_style_t screen_style;
+static lv_style_t panel_style;
+static bool night_palette;
+static dashboard_display_mode_t display_mode;
+static nvs_handle_t display_settings;
+static lv_indev_read_cb_t read_touch;
+static esp_err_t (*apply_backlight)(int percent);
 
 static lv_obj_t *label(lv_obj_t *parent, const char *text, const lv_font_t *font,
                        uint32_t color, int x, int y)
@@ -75,7 +97,11 @@ static lv_obj_t *surface(lv_obj_t *parent, int x, int y, int width, int height,
     lv_obj_set_style_pad_all(object, 0, 0);
     lv_obj_set_style_border_width(object, 0, 0);
     lv_obj_set_style_radius(object, radius, 0);
-    lv_obj_set_style_bg_color(object, lv_color_hex(color), 0);
+    if (color == panel) {
+        lv_obj_add_style(object, &panel_style, 0);
+    } else {
+        lv_obj_set_style_bg_color(object, lv_color_hex(color), 0);
+    }
     lv_obj_set_scrollable(object, false);
     lv_obj_set_clickable(object, false);
     return object;
@@ -104,18 +130,26 @@ static lv_obj_t *create_screen(void)
 {
     lv_obj_t *screen = lv_obj_create(NULL);
     lv_obj_set_style_pad_all(screen, 0, 0);
-    lv_obj_set_style_bg_color(screen, lv_color_hex(background), 0);
+    lv_obj_add_style(screen, &screen_style, 0);
     lv_obj_set_scrollable(screen, false);
     return screen;
 }
 
 static esp_err_t paint_map(const char regions[DASHBOARD_REGION_COUNT])
 {
+    static char painted_regions[DASHBOARD_REGION_COUNT];
+    static bool painted;
+    static bool painted_night;
+    if (painted && regions && painted_night == night_palette &&
+        memcmp(regions, painted_regions, sizeof(painted_regions)) == 0) {
+        return ESP_OK;
+    }
+
     uint16_t region_color[UA_MAP_BORDER + 1] = {0};
-    region_color[0] = lv_color_to_u16(lv_color_hex(panel));
-    region_color[UA_MAP_BORDER] = lv_color_to_u16(lv_color_hex(0x263848));
+    region_color[0] = lv_color_to_u16(lv_color_hex(night_palette ? night_panel : panel));
+    region_color[UA_MAP_BORDER] = lv_color_to_u16(lv_color_hex(night_palette ? 0x1C2936 : 0x263848));
     for (unsigned index = 1; index < DASHBOARD_REGION_COUNT; ++index) {
-        uint32_t color = 0x436078;
+        uint32_t color = night_palette ? 0x304759 : 0x436078;
         if (regions) {
             if (regions[index] == 'R') {
                 color = 0xBE504C;
@@ -147,6 +181,13 @@ static esp_err_t paint_map(const char regions[DASHBOARD_REGION_COUNT])
     if (run != sizeof(ua_map_runs)) {
         return ESP_ERR_INVALID_SIZE;
     }
+    if (regions) {
+        memcpy(painted_regions, regions, sizeof(painted_regions));
+    } else {
+        memset(painted_regions, 0, sizeof(painted_regions));
+    }
+    painted = true;
+    painted_night = night_palette;
     if (map_canvas) {
         lv_obj_invalidate(map_canvas);
     }
@@ -208,6 +249,108 @@ static time_t kyiv_clock(struct tm *local)
 {
     const time_t current = time(NULL);
     return current >= 1700000000 && localtime_r(&current, local) ? current : 0;
+}
+
+static void refresh_display_mode(void)
+{
+    struct tm local;
+    const int minute = kyiv_clock(&local) ? local.tm_hour * 60 + local.tm_min : -1;
+    const bool night = dashboard_display_is_night(&display_mode, minute);
+    if (night != night_palette) {
+        night_palette = night;
+        lv_style_set_bg_color(&screen_style, lv_color_hex(night ? night_background : background));
+        lv_style_set_bg_color(&panel_style, lv_color_hex(night ? night_panel : panel));
+        lv_obj_report_style_change(&screen_style);
+        lv_obj_report_style_change(&panel_style);
+        dashboard_data_snapshot_t data;
+        dashboard_data_snapshot(&data);
+        ESP_ERROR_CHECK_WITHOUT_ABORT(paint_map(data.region_alerts));
+    }
+
+    static int applied_percent = -1;
+    const int percent = dashboard_display_brightness(&display_mode, minute);
+    if (percent != applied_percent) {
+        const esp_err_t result = apply_backlight(percent);
+        if (result == ESP_OK) {
+            applied_percent = percent;
+        } else {
+            ESP_LOGW("dashboard_screen", "Backlight update failed: %s", esp_err_to_name(result));
+        }
+    }
+}
+
+static void read_display_touch(lv_indev_t *input, lv_indev_data_t *data)
+{
+    read_touch(input, data);
+    const bool was_asleep = display_mode.asleep;
+    if (dashboard_display_touch(&display_mode, data->state == LV_INDEV_STATE_PRESSED,
+                                esp_timer_get_time() / 1000)) {
+        // Hide the entire wake gesture, including its release, from LVGL.
+        data->state = LV_INDEV_STATE_RELEASED;
+    }
+    if (was_asleep && !display_mode.asleep) {
+        refresh_display_mode();
+    }
+}
+
+static uint8_t display_flags(void)
+{
+    return (display_mode.night_enabled ? SETTING_NIGHT : 0) |
+           (display_mode.eco_enabled ? SETTING_ECO : 0) |
+           (display_mode.alert_wake_enabled ? SETTING_ALERT_WAKE : 0);
+}
+
+static void use_display_flags(uint8_t flags)
+{
+    display_mode.night_enabled = (flags & SETTING_NIGHT) != 0;
+    display_mode.eco_enabled = (flags & SETTING_ECO) != 0;
+    display_mode.alert_wake_enabled = (flags & SETTING_ALERT_WAKE) != 0;
+}
+
+static void change_display_setting(lv_event_t *event)
+{
+    lv_obj_t *control = lv_event_get_target_obj(event);
+    const uint8_t setting = (uintptr_t)lv_event_get_user_data(event);
+    const bool checked = lv_obj_has_state(control, LV_STATE_CHECKED);
+    const uint8_t old_flags = display_flags();
+    const uint8_t flags = checked ? old_flags | setting : old_flags & ~setting;
+    esp_err_t err = nvs_set_u8(display_settings, "flags", flags);
+    if (err == ESP_OK) {
+        err = nvs_commit(display_settings);
+    }
+    if (err != ESP_OK) {
+        lv_obj_set_state(control, LV_STATE_CHECKED, (old_flags & setting) != 0);
+        lv_label_set_text(display_settings_note, "Не вдалося зберегти налаштування");
+        ESP_LOGW("dashboard_screen", "Display settings save failed: %s", esp_err_to_name(err));
+        return;
+    }
+    lv_label_set_text(display_settings_note, "");
+    use_display_flags(flags);
+    display_mode.last_activity_ms = esp_timer_get_time() / 1000;
+    dashboard_display_idle(&display_mode, display_mode.last_activity_ms);
+    refresh_display_mode();
+}
+
+static void add_display_switch(int y, const char *name, const char *description, uint8_t setting)
+{
+    lv_obj_t *card = surface(display_settings_screen, MARGIN, y, CARD_WIDTH, 80, panel, 12);
+    label(card, name, body_font, text_color, 14, 9);
+    label(card, description, small_font, muted, 14, 44);
+    lv_obj_t *control = lv_switch_create(card);
+    lv_obj_set_size(control, 52, 28);
+    lv_obj_set_pos(control, CARD_WIDTH - 67, 10);
+    lv_obj_set_state(control, LV_STATE_CHECKED, (display_flags() & setting) != 0);
+    lv_obj_add_event_cb(control, change_display_setting, LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)setting);
+}
+
+static void add_display_settings_screen(void)
+{
+    label(display_settings_screen, "Екран", title_font, text_color, 16, 15);
+    button(display_settings_screen, "Назад", 370, 14, 94, show_screen, home_screen);
+    add_display_switch(69, "Нічний режим", "22:00–07:00 за Києвом · яскравість 8%", SETTING_NIGHT);
+    add_display_switch(159, "Економний режим", "Підсвітка гасне через 60 с без дотиків", SETTING_ECO);
+    add_display_switch(249, "Пробудження від тривоги", "Коли в області починається нова тривога", SETTING_ALERT_WAKE);
+    display_settings_note = label(display_settings_screen, "", body_font, alarm, 16, 351);
 }
 
 static void update_clock(void)
@@ -516,13 +659,23 @@ static void update_wifi(lv_timer_t *timer)
     }
 }
 
+static void set_label_if_changed(lv_obj_t *object, const char *text)
+{
+    const char *current = lv_label_get_text(object);
+    if (!current || strcmp(current, text) != 0) {
+        lv_label_set_text(object, text);
+    }
+}
+
 static void update_age(lv_obj_t *object, int64_t updated_us, bool stale)
 {
     const long long minutes = (esp_timer_get_time() - updated_us) / 60000000;
     if (minutes == 0) {
-        lv_label_set_text(object, stale ? "Щойно · застар." : "Щойно оновлено");
+        set_label_if_changed(object, stale ? "Щойно · застар." : "Щойно оновлено");
     } else {
-        lv_label_set_text_fmt(object, "%lld хв%s", minutes, stale ? " · застар." : " тому");
+        char text[64];
+        snprintf(text, sizeof(text), "%lld хв%s", minutes, stale ? " · застар." : " тому");
+        set_label_if_changed(object, text);
     }
 }
 
@@ -531,20 +684,22 @@ static void update_weather_card(const dashboard_data_snapshot_t *data)
     if (data->weather_updated_us) {
         const int value = data->temperature_tenths;
         const int magnitude = value < 0 ? -value : value;
-        lv_label_set_text_fmt(weather_value, "%s%d,%d °C", value < 0 ? "−" : "",
-                              magnitude / 10, magnitude % 10);
+        char text[40];
+        snprintf(text, sizeof(text), "%s%d,%d °C", value < 0 ? "−" : "",
+                 magnitude / 10, magnitude % 10);
+        set_label_if_changed(weather_value, text);
         update_age(weather_note, data->weather_updated_us, data->weather_state == DASH_DATA_STALE);
         return;
     }
 
-    lv_label_set_text(weather_value, "— °C");
+    set_label_if_changed(weather_value, "— °C");
     const char *message = "Оновлення…";
     if (dashboard_wifi_state() != DASH_WIFI_CONNECTED) {
         message = "Очікує Wi-Fi";
     } else if (data->weather_state == DASH_DATA_UNAVAILABLE) {
         message = "Немає даних";
     }
-    lv_label_set_text(weather_note, message);
+    set_label_if_changed(weather_note, message);
 }
 
 static void update_alert_card(const dashboard_data_snapshot_t *data)
@@ -553,7 +708,7 @@ static void update_alert_card(const dashboard_data_snapshot_t *data)
     const char *note = "Очікування даних";
     uint32_t color = muted;
     if (data->alerts_state == DASH_DATA_FRESH) {
-        switch (data->region_alerts[12]) {
+        switch (data->region_alerts[DNIPRO_REGION]) {
         case 'R':
             status = "Повітряна тривога";
             color = alarm;
@@ -583,37 +738,45 @@ static void update_alert_card(const dashboard_data_snapshot_t *data)
         note = "Очікує Wi-Fi";
     }
 
-    lv_label_set_text(alert_value, status);
-    lv_obj_set_style_text_color(alert_value, lv_color_hex(color), 0);
+    set_label_if_changed(alert_value, status);
+    const lv_color_t status_color = lv_color_hex(color);
+    if (!lv_color_eq(lv_obj_get_style_text_color(alert_value, LV_PART_MAIN), status_color)) {
+        lv_obj_set_style_text_color(alert_value, status_color, 0);
+    }
     if (data->alerts_state == DASH_DATA_FRESH || data->alerts_state == DASH_DATA_STALE) {
         update_age(alert_note, data->alerts_updated_us, data->alerts_state == DASH_DATA_STALE);
     } else {
-        lv_label_set_text(alert_note, note);
+        set_label_if_changed(alert_note, note);
     }
 }
 
 static void update_remote_data(lv_timer_t *timer)
 {
+    dashboard_data_snapshot_t data;
+    dashboard_data_snapshot(&data);
+    const int64_t now_ms = esp_timer_get_time() / 1000;
+    dashboard_display_idle(&display_mode, now_ms);
+    if (dashboard_display_alert(&display_mode, data.alerts_state == DASH_DATA_FRESH,
+                                data.region_alerts[DNIPRO_REGION], now_ms) &&
+        !setup_in_progress(dashboard_wifi_state())) {
+        lv_screen_load(home_screen);
+    }
+    refresh_display_mode();
     lv_obj_t *active = lv_screen_active();
     if (active != home_screen && active != schedule_screen) {
         return;
     }
-    dashboard_data_snapshot_t data;
-    dashboard_data_snapshot(&data);
     update_energy_cards(&data);
     if (active != home_screen) {
         return;
     }
     update_clock();
-    static int64_t painted_at;
     update_weather_card(&data);
     update_alert_card(&data);
-    if (data.alerts_updated_us != painted_at && paint_map(data.region_alerts) == ESP_OK) {
-        painted_at = data.alerts_updated_us;
-    }
+    ESP_ERROR_CHECK_WITHOUT_ABORT(paint_map(data.region_alerts));
 }
 
-esp_err_t dashboard_screen_create(void)
+esp_err_t dashboard_screen_create(lv_indev_t *touch, esp_err_t (*set_backlight)(int percent))
 {
     const size_t font_size = (size_t)(ubuntu_medium_end - ubuntu_medium_start);
     small_font = lv_tiny_ttf_create_data_ex(ubuntu_medium_start, font_size, 14, LV_FONT_KERNING_NONE, 48);
@@ -623,14 +786,32 @@ esp_err_t dashboard_screen_create(void)
         return ESP_ERR_NO_MEM;
     }
 
+    uint8_t flags = 0;
+    esp_err_t settings_error = nvs_open(display_settings_namespace, NVS_READWRITE, &display_settings);
+    if (settings_error == ESP_OK) {
+        settings_error = nvs_get_u8(display_settings, "flags", &flags);
+    }
+    if (settings_error != ESP_OK && settings_error != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW("dashboard_screen", "Display settings read failed: %s", esp_err_to_name(settings_error));
+    }
+    use_display_flags(flags);
+    display_mode.last_activity_ms = esp_timer_get_time() / 1000;
+    apply_backlight = set_backlight;
+    lv_style_init(&screen_style);
+    lv_style_set_bg_color(&screen_style, lv_color_hex(background));
+    lv_style_init(&panel_style);
+    lv_style_set_bg_color(&panel_style, lv_color_hex(panel));
+
     home_screen = create_screen();
     schedule_screen = create_screen();
     wifi_screen = create_screen();
+    display_settings_screen = create_screen();
 
     label(home_screen, "Дніпро", title_font, text_color, 16, 8);
     home_clock = label(home_screen, "--:--", title_font, text_color, 0, 0);
-    lv_obj_align(home_clock, LV_ALIGN_TOP_MID, 0, 10);
+    lv_obj_align(home_clock, LV_ALIGN_TOP_MID, -60, 10);
 
+    button(home_screen, "Екран", 238, 10, 84, show_screen, display_settings_screen);
     lv_obj_t *home_wifi_button = button(home_screen, "Wi-Fi", 334, 10, 130, show_screen, wifi_screen);
     lv_obj_set_style_pad_all(home_wifi_button, 0, 0);
     home_wifi_status = lv_obj_get_child(home_wifi_button, 0);
@@ -669,6 +850,9 @@ esp_err_t dashboard_screen_create(void)
 
     add_schedule_screen();
     add_wifi_screen();
+    add_display_settings_screen();
+    read_touch = lv_indev_get_read_cb(touch);
+    lv_indev_set_read_cb(touch, read_display_touch);
     lv_screen_load(home_screen);
     update_wifi(NULL);
     update_remote_data(NULL);
