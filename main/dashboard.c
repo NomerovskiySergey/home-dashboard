@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <time.h>
 
+#include "driver/ledc.h"
 #include "esp_board_manager_includes.h"
 #include "esp_err.h"
 #include "esp_lcd_panel_rgb.h"
@@ -13,8 +14,18 @@
 #include "esp_log.h"
 
 static const char *const tag = "dashboard";
+static periph_ledc_handle_t *backlight;
+static uint32_t max_backlight_duty;
 
-static void start_display(void)
+static esp_err_t set_backlight(int percent)
+{
+    const uint32_t duty = max_backlight_duty * percent / 100;
+    // Display-mode updates run under the LVGL lock.
+    const esp_err_t result = ledc_set_duty(backlight->speed_mode, backlight->channel, duty);
+    return result == ESP_OK ? ledc_update_duty(backlight->speed_mode, backlight->channel) : result;
+}
+
+static lv_indev_t *start_display(void)
 {
     ESP_ERROR_CHECK(esp_board_manager_init_device_by_name("display_lcd"));
 
@@ -23,8 +34,8 @@ static void start_display(void)
     dev_lcd_touch_handles_t *touch = NULL;
 
     ESP_ERROR_CHECK(esp_board_manager_get_device_handle("display_lcd", (void **)&lcd));
-    /* About 60 Hz at this panel's timings leaves bandwidth for Wi-Fi and PSRAM. */
-    ESP_ERROR_CHECK(esp_lcd_rgb_panel_set_pclk(lcd->panel_handle, 16000000));
+    /* Leave PSRAM bandwidth for the RGB bounce buffers during Wi-Fi traffic. */
+    ESP_ERROR_CHECK(esp_lcd_rgb_panel_set_pclk(lcd->panel_handle, 14000000));
     ESP_ERROR_CHECK(esp_board_manager_get_device_config("display_lcd", (void **)&config));
     ESP_ERROR_CHECK(esp_board_manager_init_device_by_name("lcd_touch"));
     ESP_ERROR_CHECK(esp_board_manager_get_device_handle("lcd_touch", (void **)&touch));
@@ -64,21 +75,30 @@ static void start_display(void)
         .disp = display,
         .handle = touch->touch_handle,
     };
-    ESP_ERROR_CHECK(lvgl_port_add_touch(&touch_config) ? ESP_OK : ESP_FAIL);
+    lv_indev_t *input = lvgl_port_add_touch(&touch_config);
+    ESP_ERROR_CHECK(input ? ESP_OK : ESP_FAIL);
+
     ESP_ERROR_CHECK(esp_board_manager_init_device_by_name("lcd_brightness"));
+    ESP_ERROR_CHECK(esp_board_manager_get_device_handle("lcd_brightness", (void **)&backlight));
+    dev_ledc_ctrl_config_t *brightness = NULL;
+    periph_ledc_config_t *pwm = NULL;
+    ESP_ERROR_CHECK(esp_board_manager_get_device_config("lcd_brightness", (void **)&brightness));
+    ESP_ERROR_CHECK(esp_board_periph_get_config(brightness->ledc_name, (void **)&pwm));
+    max_backlight_duty = (1U << pwm->duty_resolution) - 1;
+    return input;
 }
 
 void app_main(void)
 {
     setenv("TZ", "EET-2EEST,M3.5.0/3,M10.5.0/4", 1);
     tzset();
-    start_display();
+    lv_indev_t *input = start_display();
     ESP_ERROR_CHECK(dashboard_wifi_start());
     ESP_ERROR_CHECK_WITHOUT_ABORT(dashboard_data_start());
     if (!lvgl_port_lock(0)) {
         ESP_ERROR_CHECK(ESP_ERR_TIMEOUT);
     }
-    const esp_err_t result = dashboard_screen_create();
+    const esp_err_t result = dashboard_screen_create(input, set_backlight);
     lvgl_port_unlock();
     ESP_ERROR_CHECK(result);
     ESP_LOGI(tag, "Dashboard ready");
