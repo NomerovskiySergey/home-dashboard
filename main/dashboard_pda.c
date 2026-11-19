@@ -104,8 +104,8 @@ void dashboard_pda_draw(lv_layer_t *layer, const lv_area_t *map,
         }
     }
 
-    const int dnipro_x = map->x1 + UA_MAP_DNIPRO_X;
-    const int dnipro_y = map->y1 + UA_MAP_DNIPRO_Y;
+    const int dnipro_x = map->x1 + UA_MAP_DNIPRO_X * lv_area_get_width(map) / UA_MAP_WIDTH;
+    const int dnipro_y = map->y1 + UA_MAP_DNIPRO_Y * lv_area_get_height(map) / UA_MAP_HEIGHT;
     rim.border_color = marker;
     lv_draw_rect(layer, &rim, &(lv_area_t){dnipro_x - 4, dnipro_y - 4, dnipro_x + 4, dnipro_y + 4});
     line(layer, &stroke, dnipro_x - 1, dnipro_y, dnipro_x + 1, dnipro_y);
@@ -115,7 +115,7 @@ void dashboard_pda_draw(lv_layer_t *layer, const lv_area_t *map,
     DRAW_ICON(layer, 338, 26, wifi, signal);
     DRAW_ICON(layer, 27, 86, ink, thermometer);
     DRAW_ICON(layer, 175, 86, alert, warning);
-    DRAW_ICON(layer, 28, 137, ink, radar);
+    DRAW_ICON(layer, 28, 165, ink, radar);
     DRAW_ICON(layer, 28, 405, ink, bolt);
     line(layer, &stroke, 442, 408, 446, 412);
     line(layer, &stroke, 446, 412, 442, 416);
