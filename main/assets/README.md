@@ -5,3 +5,5 @@
 Збережіть файл GeoJSON за посиланням і виконайте `python main/assets/generate_map.py <geojson> main/assets/ukraine_map_data.h` з кореня проєкту. Генератор перевіряє коди 27 одиниць, наявність усіх регіонів на растрі та розміщення мітки Дніпра.
 
 Прошивка під час збірки вбудовує Ubuntu Medium з пакета LVGL. Шрифт поширюється за [Ubuntu Font Licence](https://ubuntu.com/legal/font-licence).
+
+Головний екран теми S.T.A.L.K.E.R. використовує Ubuntu Mono Regular із [офіційного архіву Ubuntu Font Family 0.83](https://assets.ubuntu.com/v1/0cef8205-ubuntu-font-family-0.83.zip). Файл `UbuntuMono-R.ttf` з архіву вбудовується без модифікацій під назвою `UbuntuMono-Regular.ttf`. [Ліцензія](UbuntuMono-LICENCE.txt).

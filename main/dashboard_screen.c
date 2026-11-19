@@ -9,6 +9,8 @@
 #include "assets/ukraine_map_data.h"
 #include "dashboard_data.h"
 #include "dashboard_display_mode.h"
+#include "dashboard_pda.h"
+#include "dashboard_theme.h"
 #include "dashboard_wifi.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -26,25 +28,37 @@ enum {
     SETTING_ALERT_WAKE = 1 << 2,
 };
 
-static const uint32_t background = 0x101820;
-static const uint32_t panel = 0x1B2632;
-static const uint32_t night_background = 0x070A0F;
-static const uint32_t night_panel = 0x101820;
-static const uint32_t text_color = 0xF4F7FA;
-static const uint32_t muted = 0xAFBECC;
-static const uint32_t warm = 0xF8C576;
-static const uint32_t alarm = 0xE87A74;
-static const uint32_t blue = 0xA8CFEC;
 static const char display_settings_namespace[] = "dash_display";
 _Static_assert(sizeof(display_settings_namespace) <= NVS_NS_NAME_MAX_SIZE,
                "Display settings namespace exceeds the NVS limit");
 
 extern const uint8_t ubuntu_medium_start[] asm("_binary_Ubuntu_Medium_ttf_start");
 extern const uint8_t ubuntu_medium_end[] asm("_binary_Ubuntu_Medium_ttf_end");
+extern const uint8_t ubuntu_mono_start[] asm("_binary_UbuntuMono_Regular_ttf_start");
+extern const uint8_t ubuntu_mono_end[] asm("_binary_UbuntuMono_Regular_ttf_end");
 
 static lv_font_t *small_font;
 static lv_font_t *body_font;
 static lv_font_t *title_font;
+static const lv_font_t *pda_label_font;
+static const lv_font_t *pda_value_font;
+static const lv_font_t *pda_clock_font;
+
+static struct {
+    lv_obj_t *header;
+    lv_obj_t *city;
+    lv_obj_t *settings_key;
+    lv_obj_t *wifi_key;
+    lv_obj_t *weather_card;
+    lv_obj_t *weather_heading;
+    lv_obj_t *alert_card;
+    lv_obj_t *alert_heading;
+    lv_obj_t *map_card;
+    lv_obj_t *map_heading;
+    lv_obj_t *map_marker;
+    lv_obj_t *power_card;
+    lv_obj_t *power_heading;
+} home;
 static lv_obj_t *home_screen;
 static lv_obj_t *home_clock;
 static lv_obj_t *home_wifi_status;
@@ -52,6 +66,10 @@ static lv_obj_t *schedule_screen;
 static lv_obj_t *wifi_screen;
 static lv_obj_t *display_settings_screen;
 static lv_obj_t *display_settings_note;
+static lv_obj_t *theme_screen;
+static lv_obj_t *theme_name;
+static lv_obj_t *theme_note;
+static lv_obj_t *selected_theme_row;
 static lv_obj_t *wifi_status;
 static lv_obj_t *wifi_instructions;
 static lv_obj_t *wifi_change_button;
@@ -81,38 +99,58 @@ static lv_obj_t *energy_detail_note;
 static lv_obj_t *energy_detail_age;
 static lv_obj_t *energy_intervals;
 static bool energy_show_tomorrow;
-static lv_style_t screen_style;
-static lv_style_t panel_style;
-static bool night_palette;
+static lv_style_t color_styles[DASH_COLOR_COUNT];
+static const dashboard_theme_t *theme;
+static const dashboard_palette_t *palette;
 static dashboard_display_mode_t display_mode;
 static nvs_handle_t display_settings;
 static lv_indev_read_cb_t read_touch;
 static esp_err_t (*apply_backlight)(int percent);
 
+static void update_home_wifi(dashboard_wifi_state_t state);
+static void update_alert_card(const dashboard_data_snapshot_t *data);
+
+static void apply_theme_styles(const dashboard_palette_t *next)
+{
+    palette = next;
+    for (int color = 0; color < DASH_COLOR_COUNT; ++color) {
+        const lv_color_t value = lv_color_hex(palette->colors[color]);
+        lv_style_set_bg_color(&color_styles[color], value);
+        lv_style_set_text_color(&color_styles[color], value);
+    }
+    lv_style_t *panel = &color_styles[DASH_COLOR_PANEL];
+    lv_style_set_radius(panel, theme->panel_radius);
+    lv_style_set_border_width(panel, theme->panel_border_width);
+    lv_style_set_border_color(panel, lv_color_hex(palette->colors[DASH_COLOR_PANEL_BORDER]));
+    lv_style_set_border_post(panel, true);
+    lv_style_set_radius(&color_styles[DASH_COLOR_BUTTON], theme->button_radius);
+    if (map_stale_note) {
+        lv_obj_set_style_bg_color(map_stale_note, lv_color_hex(palette->colors[DASH_COLOR_PANEL]), 0);
+    }
+}
+
 static lv_obj_t *label(lv_obj_t *parent, const char *text, const lv_font_t *font,
-                       uint32_t color, int x, int y)
+                       dashboard_color_t color, int x, int y)
 {
     lv_obj_t *object = lv_label_create(parent);
     lv_obj_set_style_text_font(object, font, 0);
-    lv_obj_set_style_text_color(object, lv_color_hex(color), 0);
+    lv_obj_add_style(object, &color_styles[color], 0);
     lv_obj_set_pos(object, x, y);
     lv_label_set_text(object, text);
     return object;
 }
 
 static lv_obj_t *surface(lv_obj_t *parent, int x, int y, int width, int height,
-                         uint32_t color, int radius)
+                         dashboard_color_t color, int radius)
 {
     lv_obj_t *object = lv_obj_create(parent);
     lv_obj_set_pos(object, x, y);
     lv_obj_set_size(object, width, height);
     lv_obj_set_style_pad_all(object, 0, 0);
-    lv_obj_set_style_border_width(object, 0, 0);
-    lv_obj_set_style_radius(object, radius, 0);
-    if (color == panel) {
-        lv_obj_add_style(object, &panel_style, 0);
-    } else {
-        lv_obj_set_style_bg_color(object, lv_color_hex(color), 0);
+    lv_obj_add_style(object, &color_styles[color], 0);
+    if (color != DASH_COLOR_PANEL) {
+        lv_obj_set_style_border_width(object, 0, 0);
+        lv_obj_set_style_radius(object, radius, 0);
     }
     lv_obj_set_scrollable(object, false);
     lv_obj_set_clickable(object, false);
@@ -130,9 +168,8 @@ static lv_obj_t *button(lv_obj_t *parent, const char *text, int x, int y, int wi
     lv_obj_t *object = lv_button_create(parent);
     lv_obj_set_pos(object, x, y);
     lv_obj_set_size(object, width, 38);
-    lv_obj_set_style_radius(object, 10, 0);
-    lv_obj_set_style_bg_color(object, lv_color_hex(0x30465B), 0);
-    lv_obj_t *caption = label(object, text, body_font, text_color, 0, 0);
+    lv_obj_add_style(object, &color_styles[DASH_COLOR_BUTTON], 0);
+    lv_obj_t *caption = label(object, text, body_font, DASH_COLOR_TEXT, 0, 0);
     lv_obj_center(caption);
     lv_obj_add_event_cb(object, action, LV_EVENT_CLICKED, data);
     return object;
@@ -142,7 +179,7 @@ static lv_obj_t *create_screen(void)
 {
     lv_obj_t *screen = lv_obj_create(NULL);
     lv_obj_set_style_pad_all(screen, 0, 0);
-    lv_obj_add_style(screen, &screen_style, 0);
+    lv_obj_add_style(screen, &color_styles[DASH_COLOR_BACKGROUND], 0);
     lv_obj_set_scrollable(screen, false);
     return screen;
 }
@@ -150,28 +187,29 @@ static lv_obj_t *create_screen(void)
 static esp_err_t paint_map(const char regions[DASHBOARD_REGION_COUNT])
 {
     static char painted_regions[DASHBOARD_REGION_COUNT];
-    static bool painted;
-    static bool painted_night;
     static bool painted_stale;
-    if (painted && regions && painted_night == night_palette && painted_stale == map_stale &&
+    static const dashboard_palette_t *painted_palette;
+    if (regions && painted_palette == palette && painted_stale == map_stale &&
         memcmp(regions, painted_regions, sizeof(painted_regions)) == 0) {
         return ESP_OK;
     }
 
     uint16_t region_color[UA_MAP_BORDER + 1] = {0};
-    region_color[0] = lv_color_to_u16(lv_color_hex(night_palette ? night_panel : panel));
-    region_color[UA_MAP_BORDER] = lv_color_to_u16(lv_color_hex(night_palette ? 0x1C2936 : 0x263848));
+    region_color[0] = lv_color_to_u16(lv_color_hex(palette->colors[DASH_COLOR_PANEL]));
+    region_color[UA_MAP_BORDER] = lv_color_to_u16(lv_color_hex(palette->colors[DASH_COLOR_MAP_BORDER]));
     for (unsigned index = 1; index < DASHBOARD_REGION_COUNT; ++index) {
-        uint32_t color = night_palette ? 0x304759 : 0x436078;
+        dashboard_color_t color = DASH_COLOR_MAP_CLEAR;
         if (regions) {
             if (regions[index] == 'R') {
-                color = 0xBE504C;
+                color = DASH_COLOR_MAP_ALARM;
             } else if (regions[index] == 'Y' || regions[index] == 'P') {
-                color = 0xBE944A;
+                color = DASH_COLOR_MAP_WARNING;
             }
         }
-        if (map_stale) color = night_palette ? 0x263340 : 0x344454;
-        region_color[index] = lv_color_to_u16(lv_color_hex(color));
+        const lv_color_t fill = lv_color_hex(palette->colors[color]);
+        region_color[index] = lv_color_to_u16(map_stale
+            ? lv_color_mix(fill, lv_color_hex(palette->colors[DASH_COLOR_PANEL]), LV_OPA_30)
+            : fill);
     }
 
     size_t run = 0;
@@ -190,7 +228,7 @@ static esp_err_t paint_map(const char regions[DASHBOARD_REGION_COUNT])
             for (; x < end; ++x) {
                 row[x] = regions && region < DASHBOARD_REGION_COUNT && regions[region] == 'P' &&
                          !map_stale && (x + y) % 8 < 3
-                         ? lv_color_to_u16(lv_color_hex(night_palette ? 0x304759 : 0x436078))
+                         ? lv_color_to_u16(lv_color_hex(palette->colors[DASH_COLOR_MAP_CLEAR]))
                          : region_color[region];
             }
         }
@@ -203,9 +241,8 @@ static esp_err_t paint_map(const char regions[DASHBOARD_REGION_COUNT])
     } else {
         memset(painted_regions, 0, sizeof(painted_regions));
     }
-    painted = true;
-    painted_night = night_palette;
     painted_stale = map_stale;
+    painted_palette = palette;
     if (map_canvas) {
         lv_obj_invalidate(map_canvas);
     }
@@ -237,17 +274,19 @@ static esp_err_t add_map(lv_obj_t *card)
     lv_obj_set_style_transform_pivot_x(map_canvas, 0, 0);
     lv_obj_set_style_transform_pivot_y(map_canvas, 0, 0);
     lv_obj_set_style_transform_scale(map_canvas, 210, 0);
-    surface(card, 50 + UA_MAP_DNIPRO_X * 210 / 256 - 4, 49 + UA_MAP_DNIPRO_Y * 210 / 256 - 4,
-            9, 9, 0xF4D17E, 5);
+    home.map_marker = surface(card, 50 + UA_MAP_DNIPRO_X * 210 / 256 - 4,
+                              49 + UA_MAP_DNIPRO_Y * 210 / 256 - 4,
+                              9, 9, DASH_COLOR_MAP_MARKER, 5);
     return ESP_OK;
 }
 
 static lv_obj_t *make_outage_track(lv_obj_t *parent, int x, int y, int width)
 {
-    lv_obj_t *track = surface(parent, x, y, width, 12, 0x3E556A, 4);
+    lv_obj_t *track = surface(parent, x, y, width, 12, DASH_COLOR_TRACK_UNKNOWN, 4);
+    lv_obj_add_style(track, &color_styles[DASH_COLOR_TRACK], LV_STATE_USER_1);
     static const char *const times[] = {"00", "06", "12", "18", "24"};
     for (int index = 0; index < 5; ++index) {
-        lv_obj_t *tick = label(parent, times[index], small_font, muted, 0, y + 15);
+        lv_obj_t *tick = label(parent, times[index], small_font, DASH_COLOR_MUTED, 0, y + 15);
         lv_obj_set_width(tick, 24);
         lv_obj_set_style_text_align(tick, LV_TEXT_ALIGN_CENTER, 0);
         const int center = x + index * width / 4;
@@ -261,9 +300,9 @@ static bool has_plan(const dashboard_energy_day_t *day)
     return day && (day->state == DASH_ENERGY_PLANNED || day->state == DASH_ENERGY_NO_SHUTDOWNS);
 }
 
-static uint32_t outage_color(uint8_t kind)
+static dashboard_color_t outage_color(uint8_t kind)
 {
-    return kind == DASH_SLOT_OFF ? warm : 0xB92F83;
+    return kind == DASH_SLOT_OFF ? DASH_COLOR_OUTAGE : DASH_COLOR_POSSIBLE_OUTAGE;
 }
 
 static time_t kyiv_clock(struct tm *local)
@@ -277,14 +316,16 @@ static void refresh_display_mode(void)
     struct tm local;
     const int minute = kyiv_clock(&local) ? local.tm_hour * 60 + local.tm_min : -1;
     const bool night = dashboard_display_is_night(&display_mode, minute);
-    if (night != night_palette) {
-        night_palette = night;
-        lv_style_set_bg_color(&screen_style, lv_color_hex(night ? night_background : background));
-        lv_style_set_bg_color(&panel_style, lv_color_hex(night ? night_panel : panel));
-        lv_obj_report_style_change(&screen_style);
-        lv_obj_report_style_change(&panel_style);
+    const dashboard_palette_t *next = night ? &theme->night : &theme->day;
+    if (next != palette) {
+        apply_theme_styles(next);
+        lv_obj_report_style_change(NULL);
         dashboard_data_snapshot_t data;
         dashboard_data_snapshot(&data);
+        if (!dashboard_data_alert_details(&screen_alert_details, &data)) data.alert_details_state = DASH_DATA_STALE;
+        map_stale = data.alerts_state != DASH_DATA_FRESH;
+        update_home_wifi(dashboard_wifi_state());
+        update_alert_card(&data);
         ESP_ERROR_CHECK_WITHOUT_ABORT(paint_map(data.region_alerts));
     }
 
@@ -354,24 +395,161 @@ static void change_display_setting(lv_event_t *event)
 
 static void add_display_switch(int y, const char *name, const char *description, uint8_t setting)
 {
-    lv_obj_t *card = surface(display_settings_screen, MARGIN, y, CARD_WIDTH, 80, panel, 12);
-    label(card, name, body_font, text_color, 14, 9);
-    label(card, description, small_font, muted, 14, 44);
+    lv_obj_t *card = surface(display_settings_screen, MARGIN, y, CARD_WIDTH, 80, DASH_COLOR_PANEL, 12);
+    label(card, name, body_font, DASH_COLOR_TEXT, 14, 9);
+    label(card, description, small_font, DASH_COLOR_MUTED, 14, 44);
     lv_obj_t *control = lv_switch_create(card);
     lv_obj_set_size(control, 52, 28);
     lv_obj_set_pos(control, CARD_WIDTH - 67, 10);
+    lv_obj_add_style(control, &color_styles[DASH_COLOR_SELECTED], LV_PART_INDICATOR | LV_STATE_CHECKED);
     lv_obj_set_state(control, LV_STATE_CHECKED, (display_flags() & setting) != 0);
     lv_obj_add_event_cb(control, change_display_setting, LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)setting);
 }
 
+static void apply_home_layout(void)
+{
+    const bool pda = theme->home_layout == DASH_HOME_PDA;
+    lv_obj_set_hidden(home.header, !pda);
+    lv_obj_set_hidden(home.map_marker, pda);
+
+    lv_label_set_text(home.city, pda ? "ДНІПРО" : "Дніпро");
+    lv_obj_set_style_text_font(home.city, pda ? pda_value_font : title_font, 0);
+    lv_obj_set_pos(home.city, pda ? 44 : 16, pda ? 23 : 8);
+    lv_obj_set_style_text_font(home_clock, pda ? pda_clock_font : title_font, 0);
+    lv_obj_align(home_clock, LV_ALIGN_TOP_MID, -60, pda ? 12 : 10);
+
+    lv_obj_set_y(home.settings_key, pda ? 15 : 10);
+    lv_obj_set_y(home.wifi_key, pda ? 15 : 10);
+    lv_obj_t *settings_caption = lv_obj_get_child(home.settings_key, 0);
+    lv_obj_set_style_text_font(settings_caption, pda ? pda_label_font : body_font, 0);
+    lv_obj_align(settings_caption, LV_ALIGN_CENTER, pda ? 7 : 0, 0);
+    lv_obj_align(home_wifi_status, LV_ALIGN_CENTER, pda ? 7 : 0, 0);
+
+    lv_obj_set_y(home.weather_card, pda ? 61 : 64);
+    lv_obj_set_y(home.alert_card, pda ? 61 : 64);
+    lv_obj_set_height(home.weather_card, 88);
+    lv_obj_set_height(home.alert_card, 88);
+    lv_obj_set_width(home.weather_card, pda ? 148 : 140);
+    lv_obj_set_style_text_font(home.weather_heading, pda ? pda_label_font : small_font, 0);
+    lv_obj_set_style_text_font(home.alert_heading, pda ? pda_label_font : small_font, 0);
+    lv_obj_set_style_text_font(weather_value, pda ? pda_value_font : title_font, 0);
+    lv_obj_set_pos(home.weather_heading, pda ? 31 : 12, 3);
+    lv_obj_set_pos(home.alert_heading, pda ? 31 : 12, 4);
+    lv_obj_set_pos(weather_value, pda ? 31 : 12, pda ? 20 : 18);
+    lv_obj_set_pos(weather_note, pda ? 31 : 12, pda ? 41 : 49);
+    lv_obj_set_pos(alert_value, pda ? 31 : 12, pda ? 21 : 23);
+    lv_obj_set_pos(alert_note, pda ? 31 : 12, 49);
+    lv_obj_set_pos(alert_threat, pda ? 31 : 12, 67);
+    lv_obj_set_width(alert_value, pda ? 257 : 276);
+    lv_obj_set_width(alert_note, pda ? 257 : 276);
+    lv_obj_set_width(alert_threat, pda ? 257 : 276);
+
+    lv_obj_set_y(home.map_card, pda ? 155 : 160);
+    lv_obj_set_height(home.map_card, 234);
+    lv_obj_set_x(home.map_heading, pda ? 32 : 12);
+    lv_obj_set_style_text_font(home.map_heading, pda ? pda_label_font : body_font, 0);
+
+    lv_obj_set_y(home.power_card, pda ? 393 : 400);
+    lv_obj_set_height(home.power_card, pda ? 73 : 68);
+    lv_obj_set_x(home.power_heading, pda ? 32 : 12);
+    lv_obj_set_style_text_font(home.power_heading, pda ? pda_label_font : body_font, 0);
+    lv_obj_align(energy_home_note, pda ? LV_ALIGN_TOP_RIGHT : LV_ALIGN_TOP_LEFT,
+                 pda ? -31 : 230, 6);
+}
+
+static void draw_pda(lv_event_t *event)
+{
+    if (theme->home_layout != DASH_HOME_PDA) {
+        return;
+    }
+
+    lv_area_t map;
+    lv_obj_get_coords(map_canvas, &map);
+    map.x2 = map.x1 + UA_MAP_WIDTH * 210 / 256 - 1;
+    map.y2 = map.y1 + UA_MAP_HEIGHT * 210 / 256 - 1;
+    dashboard_pda_draw(lv_event_get_layer(event), &map,
+                       lv_color_hex(palette->colors[DASH_COLOR_PANEL_BORDER]),
+                       lv_color_hex(palette->colors[DASH_COLOR_MUTED]),
+                       lv_color_hex(palette->colors[DASH_COLOR_MAP_MARKER]),
+                       lv_obj_get_style_text_color(home_wifi_status, LV_PART_MAIN),
+                       lv_obj_get_style_text_color(alert_value, LV_PART_MAIN));
+}
+
+static void change_theme(lv_event_t *event)
+{
+    const dashboard_theme_t *next = lv_event_get_user_data(event);
+    if (next == theme) {
+        lv_label_set_text(theme_note, "");
+        return;
+    }
+
+    esp_err_t err = nvs_set_u8(display_settings, "theme", next->id);
+    if (err == ESP_OK) {
+        err = nvs_commit(display_settings);
+    }
+    if (err != ESP_OK) {
+        lv_label_set_text(theme_note, "Не вдалося зберегти тему");
+        ESP_LOGW("dashboard_screen", "Theme save failed: %s", esp_err_to_name(err));
+        return;
+    }
+
+    lv_obj_remove_state(selected_theme_row, LV_STATE_CHECKED);
+    lv_obj_set_hidden(lv_obj_get_child(selected_theme_row, 1), true);
+    selected_theme_row = lv_event_get_target_obj(event);
+    lv_obj_add_state(selected_theme_row, LV_STATE_CHECKED);
+    lv_obj_set_hidden(lv_obj_get_child(selected_theme_row, 1), false);
+    theme = next;
+    apply_home_layout();
+    lv_label_set_text(theme_name, theme->name);
+    lv_label_set_text(theme_note, "");
+    refresh_display_mode();
+}
+
+static void add_theme_screen(void)
+{
+    label(theme_screen, "Тема", title_font, DASH_COLOR_TEXT, 16, 15);
+    button(theme_screen, "Назад", 370, 14, 94, show_screen, display_settings_screen);
+
+    lv_obj_t *list = surface(theme_screen, MARGIN, 68, CARD_WIDTH, 354, DASH_COLOR_BACKGROUND, 0);
+    lv_obj_set_scrollable(list, true);
+    lv_obj_set_scroll_dir(list, LV_DIR_VER);
+
+    size_t count;
+    const dashboard_theme_t *themes = dashboard_theme_catalog(&count);
+    for (size_t i = 0; i < count; ++i) {
+        lv_obj_t *row = button(list, themes[i].name, 0, (int)i * 56, CARD_WIDTH - 12,
+                               change_theme, (void *)&themes[i]);
+        lv_obj_set_height(row, 46);
+        lv_obj_add_style(row, &color_styles[DASH_COLOR_SELECTED], LV_STATE_CHECKED);
+        lv_obj_t *caption = lv_obj_get_child(row, 0);
+        lv_obj_set_width(caption, CARD_WIDTH - 145);
+        lv_obj_set_height(caption, lv_font_get_line_height(body_font));
+        lv_label_set_long_mode(caption, LV_LABEL_LONG_MODE_DOTS);
+        lv_obj_align(caption, LV_ALIGN_LEFT_MID, 6, 0);
+        lv_obj_t *marker = label(row, "Обрана", small_font, DASH_COLOR_CLOCK, 0, 0);
+        lv_obj_align(marker, LV_ALIGN_RIGHT_MID, -6, 0);
+        if (&themes[i] == theme) {
+            selected_theme_row = row;
+            lv_obj_add_state(row, LV_STATE_CHECKED);
+        } else {
+            lv_obj_set_hidden(marker, true);
+        }
+    }
+    theme_note = label(theme_screen, "", body_font, DASH_COLOR_ALARM, 16, 435);
+}
+
 static void add_display_settings_screen(void)
 {
-    label(display_settings_screen, "Екран", title_font, text_color, 16, 15);
+    label(display_settings_screen, "Екран", title_font, DASH_COLOR_TEXT, 16, 15);
     button(display_settings_screen, "Назад", 370, 14, 94, show_screen, home_screen);
     add_display_switch(69, "Нічний режим", "22:00–07:00 за Києвом · яскравість 8%", SETTING_NIGHT);
     add_display_switch(159, "Економний режим", "Підсвітка гасне через 60 с без дотиків", SETTING_ECO);
     add_display_switch(249, "Пробудження від тривоги", "Коли в області починається нова тривога", SETTING_ALERT_WAKE);
-    display_settings_note = label(display_settings_screen, "", body_font, alarm, 16, 351);
+    label(display_settings_screen, "Тема", body_font, DASH_COLOR_TEXT, 30, 372);
+    lv_obj_t *theme_button = button(display_settings_screen, theme->name, 161, 362, 303,
+                                    show_screen, theme_screen);
+    theme_name = lv_obj_get_child(theme_button, 0);
+    display_settings_note = label(display_settings_screen, "", body_font, DASH_COLOR_ALARM, 16, 422);
 }
 
 static void update_clock(void)
@@ -405,7 +583,7 @@ static void render_track(lv_obj_t *track, const dashboard_energy_day_t *day, int
 {
     const int width = CARD_WIDTH - 24;
     lv_obj_clean(track);
-    lv_obj_set_style_bg_color(track, lv_color_hex(has_plan(day) ? 0x3E556A : 0x303843), 0);
+    lv_obj_set_state(track, LV_STATE_USER_1, has_plan(day));
     if (has_plan(day)) {
         for (int start = 0; start < DASH_ENERGY_SLOTS;) {
             const uint8_t kind = day->slots[start];
@@ -421,7 +599,7 @@ static void render_track(lv_obj_t *track, const dashboard_energy_day_t *day, int
         }
     }
     if (now_minutes >= 0) {
-        surface(track, now_minutes * (width - 2) / MINUTES_PER_DAY, 0, 2, 12, text_color, 0);
+        surface(track, now_minutes * (width - 2) / MINUTES_PER_DAY, 0, 2, 12, DASH_COLOR_TEXT, 0);
     }
 }
 
@@ -500,7 +678,7 @@ static void render_intervals(const dashboard_energy_day_t *day)
             start = end;
         }
         if (!row) {
-            label(energy_intervals, "Планових інтервалів немає", body_font, muted, 14, 6);
+            label(energy_intervals, "Планових інтервалів немає", body_font, DASH_COLOR_MUTED, 14, 6);
         }
     }
 }
@@ -512,24 +690,24 @@ static void change_schedule_day(lv_event_t *event)
 
 static void add_schedule_screen(void)
 {
-    label(schedule_screen, "Відключення ЦЕК 5.2", title_font, text_color, 16, 15);
-    energy_detail_date = label(schedule_screen, "", body_font, muted, 16, 53);
+    label(schedule_screen, "Відключення ЦЕК 5.2", title_font, DASH_COLOR_TEXT, 16, 15);
+    energy_detail_date = label(schedule_screen, "", body_font, DASH_COLOR_MUTED, 16, 53);
     button(schedule_screen, "Назад", 370, 14, 94, show_screen, home_screen);
     button(schedule_screen, "Сьогодні", 16, 81, 105, change_schedule_day, NULL);
     button(schedule_screen, "Завтра", 133, 81, 105, change_schedule_day, schedule_screen);
-    energy_detail_note = label(schedule_screen, "Оновлення…", body_font, warm, 16, 130);
+    energy_detail_note = label(schedule_screen, "Оновлення…", body_font, DASH_COLOR_WARNING, 16, 130);
 
-    lv_obj_t *timeline = surface(schedule_screen, 16, 160, CARD_WIDTH, 92, panel, 12);
-    surface(timeline, 12, 14, 10, 10, warm, 3);
-    label(timeline, "Заплановано", small_font, text_color, 29, 10);
-    surface(timeline, 157, 14, 10, 10, 0xB92F83, 3);
-    label(timeline, "Можливо", small_font, text_color, 174, 10);
+    lv_obj_t *timeline = surface(schedule_screen, 16, 160, CARD_WIDTH, 92, DASH_COLOR_PANEL, 12);
+    surface(timeline, 12, 14, 10, 10, DASH_COLOR_OUTAGE, 3);
+    label(timeline, "Заплановано", small_font, DASH_COLOR_TEXT, 29, 10);
+    surface(timeline, 157, 14, 10, 10, DASH_COLOR_POSSIBLE_OUTAGE, 3);
+    label(timeline, "Можливо", small_font, DASH_COLOR_TEXT, 174, 10);
     energy_detail_track = make_outage_track(timeline, 12, 44, CARD_WIDTH - 24);
 
-    energy_intervals = surface(schedule_screen, 16, 262, CARD_WIDTH, 167, panel, 12);
+    energy_intervals = surface(schedule_screen, 16, 262, CARD_WIDTH, 167, DASH_COLOR_PANEL, 12);
     lv_obj_set_scrollable(energy_intervals, true);
     lv_obj_set_scroll_dir(energy_intervals, LV_DIR_VER);
-    energy_detail_age = label(schedule_screen, "Alerts.energy", small_font, muted, 16, 446);
+    energy_detail_age = label(schedule_screen, "Alerts.energy", small_font, DASH_COLOR_MUTED, 16, 446);
 }
 
 static void update_energy_cards(const dashboard_data_snapshot_t *data)
@@ -589,14 +767,14 @@ static void request_setup(lv_event_t *event)
 
 static void add_wifi_screen(void)
 {
-    label(wifi_screen, "Мережа Wi-Fi", title_font, text_color, 16, 15);
-    label(wifi_screen, "Підключення до домашньої мережі", body_font, muted, 16, 53);
+    label(wifi_screen, "Мережа Wi-Fi", title_font, DASH_COLOR_TEXT, 16, 15);
+    label(wifi_screen, "Підключення до домашньої мережі", body_font, DASH_COLOR_MUTED, 16, 53);
     button(wifi_screen, "Назад", 370, 14, 94, show_screen, home_screen);
 
-    lv_obj_t *card = surface(wifi_screen, 16, 98, CARD_WIDTH, 226, panel, 12);
-    wifi_status = label(card, "", body_font, text_color, 15, 14);
+    lv_obj_t *card = surface(wifi_screen, 16, 98, CARD_WIDTH, 226, DASH_COLOR_PANEL, 12);
+    wifi_status = label(card, "", body_font, DASH_COLOR_TEXT, 15, 14);
     lv_obj_set_width(wifi_status, CARD_WIDTH - 30);
-    wifi_instructions = label(card, "", body_font, muted, 15, 59);
+    wifi_instructions = label(card, "", body_font, DASH_COLOR_MUTED, 15, 59);
     lv_obj_set_width(wifi_instructions, CARD_WIDTH - 30);
     wifi_change_button = button(card, "Змінити мережу", 15, 171, 176, request_setup, NULL);
 }
@@ -609,11 +787,11 @@ static bool setup_in_progress(int state)
 static void update_home_wifi(dashboard_wifi_state_t state)
 {
     const char *caption = "Підключення…";
-    uint32_t color = warm;
+    dashboard_color_t color = DASH_COLOR_WARNING;
     switch (state) {
     case DASH_WIFI_CONNECTED:
         caption = "Підключено";
-        color = 0xACEBC9;
+        color = DASH_COLOR_CONNECTED;
         break;
     case DASH_WIFI_SETUP:
         caption = "Налаштування";
@@ -621,17 +799,20 @@ static void update_home_wifi(dashboard_wifi_state_t state)
     case DASH_WIFI_SETUP_FAILED:
     case DASH_WIFI_ERROR:
         caption = "Помилка";
-        color = alarm;
+        color = DASH_COLOR_ALARM;
         break;
     case DASH_WIFI_OFFLINE:
         caption = "Немає зв’язку";
-        color = alarm;
+        color = DASH_COLOR_ALARM;
         break;
     default:
         break;
     }
     lv_label_set_text_fmt(home_wifi_status, "Wi-Fi\n%s", caption);
-    lv_obj_set_style_text_color(home_wifi_status, lv_color_hex(color), 0);
+    lv_obj_set_style_text_color(home_wifi_status, lv_color_hex(palette->colors[color]), 0);
+    if (theme->home_layout == DASH_HOME_PDA) {
+        lv_obj_invalidate(home.wifi_key);
+    }
 }
 
 static void update_wifi(lv_timer_t *timer)
@@ -727,20 +908,20 @@ static void update_alert_card(const dashboard_data_snapshot_t *data)
 {
     const char *status = "Статус невідомий";
     const char *note = "Очікування даних";
-    uint32_t color = muted;
+    dashboard_color_t color = DASH_COLOR_MUTED;
     if (data->alerts_state == DASH_DATA_FRESH) {
         switch (data->region_alerts[DNIPRO_REGION]) {
         case 'R':
             status = "Повітряна тривога";
-            color = alarm;
+            color = DASH_COLOR_ALARM;
             break;
         case 'Y':
             status = "Попередня загроза";
-            color = warm;
+            color = DASH_COLOR_WARNING;
             break;
         case 'P':
             status = "Часткова тривога в області";
-            color = warm;
+            color = DASH_COLOR_WARNING;
             break;
         case 'N':
             status = "Тривог не повідомлено";
@@ -748,7 +929,7 @@ static void update_alert_card(const dashboard_data_snapshot_t *data)
         }
     } else if (data->alerts_state == DASH_DATA_STALE) {
         status = "Дані тривог застаріли";
-        color = warm;
+        color = DASH_COLOR_WARNING;
     } else if (data->alerts_state == DASH_DATA_NO_TOKEN) {
         note = "Потрібен токен Alerts.in.ua";
     } else if (data->alerts_state == DASH_DATA_AUTH_ERROR) {
@@ -760,9 +941,12 @@ static void update_alert_card(const dashboard_data_snapshot_t *data)
     }
 
     set_label_if_changed(alert_value, status);
-    const lv_color_t status_color = lv_color_hex(color);
+    const lv_color_t status_color = lv_color_hex(palette->colors[color]);
     if (!lv_color_eq(lv_obj_get_style_text_color(alert_value, LV_PART_MAIN), status_color)) {
         lv_obj_set_style_text_color(alert_value, status_color, 0);
+        if (theme->home_layout == DASH_HOME_PDA) {
+            lv_obj_invalidate(home.alert_card);
+        }
     }
     if (data->alerts_state == DASH_DATA_FRESH || data->alerts_state == DASH_DATA_STALE) {
         update_age(alert_note, data->alerts_updated_us, data->alerts_state == DASH_DATA_STALE);
@@ -898,17 +1082,17 @@ static void alert_scroll_end(lv_event_t *event)
 static void add_alert_history_screen(void)
 {
     button(alert_history_screen, "‹ Назад", 16, 10, 108, show_screen, alert_detail_screen);
-    label(alert_history_screen, "Історія тривог", title_font, text_color, 140, 14);
-    alert_history_note = label(alert_history_screen, "", small_font, muted, 16, 59);
+    label(alert_history_screen, "Історія тривог", title_font, DASH_COLOR_TEXT, 140, 14);
+    alert_history_note = label(alert_history_screen, "", small_font, DASH_COLOR_MUTED, 16, 59);
     lv_obj_set_width(alert_history_note, CARD_WIDTH);
     lv_label_set_long_mode(alert_history_note, LV_LABEL_LONG_WRAP);
-    lv_obj_t *scroll = surface(alert_history_screen, 16, 103, CARD_WIDTH, 361, panel, 12);
+    lv_obj_t *scroll = surface(alert_history_screen, 16, 103, CARD_WIDTH, 361, DASH_COLOR_PANEL, 12);
     /* surface() disables hit testing; a scroll viewport must receive the drag. */
     lv_obj_set_clickable(scroll, true);
     lv_obj_set_scrollable(scroll, true);
     lv_obj_set_scroll_dir(scroll, LV_DIR_VER);
     lv_obj_add_event_cb(scroll, alert_scroll_end, LV_EVENT_SCROLL_END, "history");
-    alert_history_content = label(scroll, "Очікування даних", body_font, text_color, 12, 12);
+    alert_history_content = label(scroll, "Очікування даних", body_font, DASH_COLOR_TEXT, 12, 12);
     lv_obj_set_width(alert_history_content, CARD_WIDTH - 32);
     lv_label_set_long_mode(alert_history_content, LV_LABEL_LONG_WRAP);
 }
@@ -916,14 +1100,14 @@ static void add_alert_history_screen(void)
 static void add_alert_details_screen(void)
 {
     button(alert_detail_screen, "‹ Назад", 16, 10, 108, show_screen, home_screen);
-    label(alert_detail_screen, "Деталі", title_font, text_color, 140, 14);
+    label(alert_detail_screen, "Деталі", title_font, DASH_COLOR_TEXT, 140, 14);
     button(alert_detail_screen, "Історія", 350, 10, 114, open_alert_history, NULL);
-    lv_obj_t *scroll = surface(alert_detail_screen, 16, 64, CARD_WIDTH, 400, panel, 12);
+    lv_obj_t *scroll = surface(alert_detail_screen, 16, 64, CARD_WIDTH, 400, DASH_COLOR_PANEL, 12);
     lv_obj_set_clickable(scroll, true);
     lv_obj_set_scrollable(scroll, true);
     lv_obj_set_scroll_dir(scroll, LV_DIR_VER);
     lv_obj_add_event_cb(scroll, alert_scroll_end, LV_EVENT_SCROLL_END, "details");
-    alert_detail_content = label(scroll, "Очікування даних", body_font, text_color, 12, 12);
+    alert_detail_content = label(scroll, "Очікування даних", body_font, DASH_COLOR_TEXT, 12, 12);
     lv_obj_set_width(alert_detail_content, CARD_WIDTH - 32);
     lv_label_set_long_mode(alert_detail_content, LV_LABEL_LONG_WRAP);
 }
@@ -968,6 +1152,17 @@ static void update_remote_data(lv_timer_t *timer)
     ESP_ERROR_CHECK_WITHOUT_ABORT(paint_map(data.region_alerts));
 }
 
+static const lv_font_t *create_pda_font(int size, const lv_font_t *fallback)
+{
+    const size_t bytes = (size_t)(ubuntu_mono_end - ubuntu_mono_start);
+    lv_font_t *font = lv_tiny_ttf_create_data_ex(ubuntu_mono_start, bytes, size, LV_FONT_KERNING_NONE, 32);
+    if (!font) {
+        ESP_LOGW("dashboard_screen", "Could not initialize PDA font at %d px", size);
+        return fallback;
+    }
+    return font;
+}
+
 esp_err_t dashboard_screen_create(lv_indev_t *touch, esp_err_t (*set_backlight)(int percent))
 {
     const size_t font_size = (size_t)(ubuntu_medium_end - ubuntu_medium_start);
@@ -978,21 +1173,33 @@ esp_err_t dashboard_screen_create(lv_indev_t *touch, esp_err_t (*set_backlight)(
         return ESP_ERR_NO_MEM;
     }
 
+    pda_label_font = create_pda_font(15, small_font);
+    pda_value_font = create_pda_font(21, body_font);
+    pda_clock_font = create_pda_font(35, title_font);
+
     uint8_t flags = 0;
-    esp_err_t settings_error = nvs_open(display_settings_namespace, NVS_READWRITE, &display_settings);
+    uint8_t theme_id = DASH_THEME_STANDARD;
+    const esp_err_t settings_error = nvs_open(display_settings_namespace, NVS_READWRITE, &display_settings);
     if (settings_error == ESP_OK) {
-        settings_error = nvs_get_u8(display_settings, "flags", &flags);
-    }
-    if (settings_error != ESP_OK && settings_error != ESP_ERR_NVS_NOT_FOUND) {
-        ESP_LOGW("dashboard_screen", "Display settings read failed: %s", esp_err_to_name(settings_error));
+        const esp_err_t flags_error = nvs_get_u8(display_settings, "flags", &flags);
+        if (flags_error != ESP_OK && flags_error != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW("dashboard_screen", "Display flags read failed: %s", esp_err_to_name(flags_error));
+        }
+        const esp_err_t theme_error = nvs_get_u8(display_settings, "theme", &theme_id);
+        if (theme_error != ESP_OK && theme_error != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGW("dashboard_screen", "Theme read failed: %s", esp_err_to_name(theme_error));
+        }
+    } else {
+        ESP_LOGW("dashboard_screen", "Display settings open failed: %s", esp_err_to_name(settings_error));
     }
     use_display_flags(flags);
     display_mode.last_activity_ms = esp_timer_get_time() / 1000;
     apply_backlight = set_backlight;
-    lv_style_init(&screen_style);
-    lv_style_set_bg_color(&screen_style, lv_color_hex(background));
-    lv_style_init(&panel_style);
-    lv_style_set_bg_color(&panel_style, lv_color_hex(panel));
+    for (int color = 0; color < DASH_COLOR_COUNT; ++color) {
+        lv_style_init(&color_styles[color]);
+    }
+    theme = dashboard_theme_find(theme_id);
+    apply_theme_styles(&theme->day);
 
     home_screen = create_screen();
     schedule_screen = create_screen();
@@ -1000,30 +1207,33 @@ esp_err_t dashboard_screen_create(lv_indev_t *touch, esp_err_t (*set_backlight)(
     display_settings_screen = create_screen();
     alert_detail_screen = create_screen();
     alert_history_screen = create_screen();
+    theme_screen = create_screen();
 
-    label(home_screen, "Дніпро", title_font, text_color, 16, 8);
-    home_clock = label(home_screen, "--:--", title_font, text_color, 0, 0);
-    lv_obj_align(home_clock, LV_ALIGN_TOP_MID, -60, 10);
+    home.header = surface(home_screen, MARGIN, 10, CARD_WIDTH, 48, DASH_COLOR_PANEL, 12);
+    home.city = label(home_screen, "Дніпро", title_font, DASH_COLOR_TEXT, 16, 8);
+    home_clock = label(home_screen, "--:--", title_font, DASH_COLOR_CLOCK, 0, 0);
 
-    button(home_screen, "Екран", 238, 10, 84, show_screen, display_settings_screen);
-    lv_obj_t *home_wifi_button = button(home_screen, "Wi-Fi", 334, 10, 130, show_screen, wifi_screen);
-    lv_obj_set_style_pad_all(home_wifi_button, 0, 0);
-    home_wifi_status = lv_obj_get_child(home_wifi_button, 0);
+    home.settings_key = button(home_screen, "Екран", 238, 10, 84, show_screen, display_settings_screen);
+    home.wifi_key = button(home_screen, "Wi-Fi", 334, 10, 130, show_screen, wifi_screen);
+    lv_obj_set_style_pad_all(home.wifi_key, 0, 0);
+    home_wifi_status = lv_obj_get_child(home.wifi_key, 0);
     lv_obj_set_style_text_font(home_wifi_status, small_font, 0);
     lv_obj_set_style_text_align(home_wifi_status, LV_TEXT_ALIGN_CENTER, 0);
 
-    lv_obj_t *weather = surface(home_screen, 16, 64, 140, 88, panel, 12);
-    label(weather, "На вулиці", small_font, muted, 12, 3);
-    weather_value = label(weather, "— °C", title_font, blue, 12, 18);
-    weather_note = label(weather, "", small_font, muted, 12, 49);
+    lv_obj_t *weather = surface(home_screen, 16, 64, 140, 88, DASH_COLOR_PANEL, 12);
+    home.weather_card = weather;
+    home.weather_heading = label(weather, "На вулиці", small_font, DASH_COLOR_MUTED, 12, 3);
+    weather_value = label(weather, "— °C", title_font, DASH_COLOR_TEMPERATURE, 12, 18);
+    weather_note = label(weather, "", small_font, DASH_COLOR_MUTED, 12, 49);
 
-    lv_obj_t *local_alert = surface(home_screen, 164, 64, 300, 88, panel, 12);
+    lv_obj_t *local_alert = surface(home_screen, 164, 64, 300, 88, DASH_COLOR_PANEL, 12);
+    home.alert_card = local_alert;
     lv_obj_set_clickable(local_alert, true);
     lv_obj_add_event_cb(local_alert, show_screen, LV_EVENT_CLICKED, alert_detail_screen);
-    label(local_alert, "Дніпропетровська область", small_font, muted, 12, 4);
-    alert_value = label(local_alert, "Статус невідомий", body_font, muted, 12, 23);
-    alert_note = label(local_alert, "", small_font, muted, 12, 49);
-    alert_threat = label(local_alert, "Торкніться для деталей ›", small_font, muted, 12, 67);
+    home.alert_heading = label(local_alert, "Дніпропетровська область", small_font, DASH_COLOR_MUTED, 12, 4);
+    alert_value = label(local_alert, "Статус невідомий", body_font, DASH_COLOR_MUTED, 12, 23);
+    alert_note = label(local_alert, "", small_font, DASH_COLOR_MUTED, 12, 49);
+    alert_threat = label(local_alert, "Торкніться для деталей ›", small_font, DASH_COLOR_MUTED, 12, 67);
     lv_obj_set_width(alert_value, 276);
     lv_label_set_long_mode(alert_value, LV_LABEL_LONG_DOT);
     lv_obj_set_width(alert_note, 276);
@@ -1031,33 +1241,35 @@ esp_err_t dashboard_screen_create(lv_indev_t *touch, esp_err_t (*set_backlight)(
     lv_obj_set_width(alert_threat, 276);
     lv_label_set_long_mode(alert_threat, LV_LABEL_LONG_DOT);
 
-    lv_obj_t *map = surface(home_screen, 16, 160, CARD_WIDTH, 234, panel, 12);
-    label(map, "Тривоги по областях", body_font, text_color, 12, 5);
-    map_state_note = label(map, "Очікування", small_font, muted, 276, 7);
-    surface(map, 12, 33, 9, 9, 0xBE504C, 3);
-    label(map, "Тривога", small_font, text_color, 26, 29);
-    surface(map, 111, 33, 9, 9, 0xBE944A, 3);
-    label(map, "Загроза", small_font, text_color, 125, 29);
-    surface(map, 211, 33, 9, 9, 0xBE944A, 0);
-    surface(map, 213, 33, 2, 9, 0x436078, 0);
-    surface(map, 217, 33, 2, 9, 0x436078, 0);
-    label(map, "Часткова", small_font, text_color, 225, 29);
+    lv_obj_t *map = surface(home_screen, 16, 160, CARD_WIDTH, 234, DASH_COLOR_PANEL, 12);
+    home.map_card = map;
+    home.map_heading = label(map, "Тривоги по областях", body_font, DASH_COLOR_TEXT, 12, 5);
+    map_state_note = label(map, "Очікування", small_font, DASH_COLOR_MUTED, 276, 7);
+    surface(map, 12, 33, 9, 9, DASH_COLOR_MAP_ALARM, 3);
+    label(map, "Тривога", small_font, DASH_COLOR_TEXT, 26, 29);
+    surface(map, 111, 33, 9, 9, DASH_COLOR_MAP_WARNING, 3);
+    label(map, "Загроза", small_font, DASH_COLOR_TEXT, 125, 29);
+    surface(map, 211, 33, 9, 9, DASH_COLOR_MAP_WARNING, 0);
+    surface(map, 213, 33, 2, 9, DASH_COLOR_MAP_CLEAR, 0);
+    surface(map, 217, 33, 2, 9, DASH_COLOR_MAP_CLEAR, 0);
+    label(map, "Часткова", small_font, DASH_COLOR_TEXT, 225, 29);
     const esp_err_t result = add_map(map);
     if (result != ESP_OK) {
         ESP_LOGE("dashboard_screen", "Could not initialize the Ukraine map");
         return result;
     }
-    label(map, "© OSM", small_font, muted, 12, 212);
-    map_stale_note = label(map, "Статус невідомий", body_font, warm, 120, 122);
-    lv_obj_set_style_bg_color(map_stale_note, lv_color_hex(panel), 0);
+    label(map, "© OSM", small_font, DASH_COLOR_MUTED, 12, 212);
+    map_stale_note = label(map, "Статус невідомий", body_font, DASH_COLOR_WARNING, 120, 122);
+    lv_obj_set_style_bg_color(map_stale_note, lv_color_hex(palette->colors[DASH_COLOR_PANEL]), 0);
     lv_obj_set_style_bg_opa(map_stale_note, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(map_stale_note, 8, 0);
 
-    lv_obj_t *power = surface(home_screen, 16, 400, CARD_WIDTH, 68, panel, 12);
+    lv_obj_t *power = surface(home_screen, 16, 400, CARD_WIDTH, 68, DASH_COLOR_PANEL, 12);
     lv_obj_set_clickable(power, true);
     lv_obj_add_event_cb(power, show_screen, LV_EVENT_CLICKED, schedule_screen);
-    label(power, "ЦЕК 5.2", body_font, text_color, 12, 4);
-    energy_home_note = label(power, "Оновлення…", small_font, warm, 230, 6);
+    home.power_card = power;
+    home.power_heading = label(power, "ЦЕК 5.2", body_font, DASH_COLOR_TEXT, 12, 4);
+    energy_home_note = label(power, "Оновлення…", small_font, DASH_COLOR_WARNING, 230, 6);
     energy_home_track = make_outage_track(power, 12, 29, CARD_WIDTH - 24);
 
     add_schedule_screen();
@@ -1065,6 +1277,9 @@ esp_err_t dashboard_screen_create(lv_indev_t *touch, esp_err_t (*set_backlight)(
     add_alert_history_screen();
     add_wifi_screen();
     add_display_settings_screen();
+    add_theme_screen();
+    apply_home_layout();
+    lv_obj_add_event_cb(home_screen, draw_pda, LV_EVENT_DRAW_POST, NULL);
     read_touch = lv_indev_get_read_cb(touch);
     lv_indev_set_read_cb(touch, read_display_touch);
     lv_screen_load(home_screen);
