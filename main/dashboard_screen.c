@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 #include <time.h>
 
@@ -60,6 +61,13 @@ static lv_obj_t *weather_value;
 static lv_obj_t *weather_note;
 static lv_obj_t *alert_value;
 static lv_obj_t *alert_note;
+static lv_obj_t *alert_threat;
+static lv_obj_t *alert_detail_screen;
+static lv_obj_t *alert_detail_content;
+static lv_obj_t *map_state_note;
+static lv_obj_t *map_stale_note;
+static bool map_stale;
+static dashboard_alert_details_t screen_alert_details;
 
 static lv_obj_t *energy_home_track;
 static lv_obj_t *energy_home_note;
@@ -140,7 +148,8 @@ static esp_err_t paint_map(const char regions[DASHBOARD_REGION_COUNT])
     static char painted_regions[DASHBOARD_REGION_COUNT];
     static bool painted;
     static bool painted_night;
-    if (painted && regions && painted_night == night_palette &&
+    static bool painted_stale;
+    if (painted && regions && painted_night == night_palette && painted_stale == map_stale &&
         memcmp(regions, painted_regions, sizeof(painted_regions)) == 0) {
         return ESP_OK;
     }
@@ -157,6 +166,7 @@ static esp_err_t paint_map(const char regions[DASHBOARD_REGION_COUNT])
                 color = 0xBE944A;
             }
         }
+        if (map_stale) color = night_palette ? 0x263340 : 0x344454;
         region_color[index] = lv_color_to_u16(lv_color_hex(color));
     }
 
@@ -174,7 +184,10 @@ static esp_err_t paint_map(const char regions[DASHBOARD_REGION_COUNT])
             }
             const unsigned end = x + length;
             for (; x < end; ++x) {
-                row[x] = region_color[region];
+                row[x] = regions && region < DASHBOARD_REGION_COUNT && regions[region] == 'P' &&
+                         !map_stale && (x + y) % 8 < 3
+                         ? lv_color_to_u16(lv_color_hex(night_palette ? 0x304759 : 0x436078))
+                         : region_color[region];
             }
         }
     }
@@ -188,6 +201,7 @@ static esp_err_t paint_map(const char regions[DASHBOARD_REGION_COUNT])
     }
     painted = true;
     painted_night = night_palette;
+    painted_stale = map_stale;
     if (map_canvas) {
         lv_obj_invalidate(map_canvas);
     }
@@ -215,8 +229,11 @@ static esp_err_t add_map(lv_obj_t *card)
 
     map_canvas = lv_canvas_create(card);
     lv_canvas_set_draw_buf(map_canvas, &map_buffer);
-    lv_obj_set_pos(map_canvas, 12, 30);
-    surface(card, 12 + UA_MAP_DNIPRO_X - 4, 30 + UA_MAP_DNIPRO_Y - 4,
+    lv_obj_set_pos(map_canvas, 50, 49);
+    lv_obj_set_style_transform_pivot_x(map_canvas, 0, 0);
+    lv_obj_set_style_transform_pivot_y(map_canvas, 0, 0);
+    lv_obj_set_style_transform_scale(map_canvas, 210, 0);
+    surface(card, 50 + UA_MAP_DNIPRO_X * 210 / 256 - 4, 49 + UA_MAP_DNIPRO_Y * 210 / 256 - 4,
             9, 9, 0xF4D17E, 5);
     return ESP_OK;
 }
@@ -748,12 +765,97 @@ static void update_alert_card(const dashboard_data_snapshot_t *data)
     } else {
         set_label_if_changed(alert_note, note);
     }
+    set_label_if_changed(alert_threat, "Торкніться для деталей ›");
+    if (data->alerts_state != DASH_DATA_FRESH || data->region_alerts[DNIPRO_REGION] == 'N') return;
+    if (data->alert_details_state != DASH_DATA_FRESH) {
+        set_label_if_changed(alert_threat, data->alert_details_updated_us ? "Деталі застаріли ›" : "Деталі недоступні ›");
+        return;
+    }
+    const dashboard_alert_record_t *primary = dashboard_alert_primary(&screen_alert_details,
+                                                                      data->region_alerts[DNIPRO_REGION]);
+    if (primary) {
+        char clock[6], text[96];
+        const int64_t minutes = dashboard_alert_elapsed(primary->started_at, (int64_t)time(NULL));
+        if (minutes >= 0 && dashboard_alert_kyiv_clock(primary->started_at, clock)) {
+            snprintf(text, sizeof(text), "Від %s · %lld хв", clock, (long long)minutes);
+            set_label_if_changed(alert_note, text);
+        } else set_label_if_changed(alert_note, "Час початку невідомий");
+        if (primary->threat_count) {
+            snprintf(text, sizeof(text), "%s%s ›", dashboard_alert_threat_name(primary->threats[0]),
+                     primary->threat_count > 1 || primary->threats_omitted ? " та інші" : "");
+            set_label_if_changed(alert_threat, text);
+        } else set_label_if_changed(alert_threat, "Деталі не надано ›");
+    } else if (screen_alert_details.count) {
+        set_label_if_changed(alert_note, screen_alert_details.count > 1 ? "Кілька локальних тривог" : "Окрема локальна тривога");
+    }
+}
+
+static void append_detail(char *buffer, size_t capacity, const char *format, ...)
+{
+    const size_t used = strlen(buffer);
+    if (used >= capacity - 1) return;
+    va_list args;
+    va_start(args, format);
+    vsnprintf(buffer + used, capacity - used, format, args);
+    va_end(args);
+}
+
+static void update_alert_details_screen(const dashboard_data_snapshot_t *data)
+{
+    static char text[8192];
+    text[0] = 0;
+    if (data->alerts_state != DASH_DATA_FRESH) {
+        append_detail(text, sizeof(text), "Поточний стан невідомий.\nПеревірте зв’язок і актуальність карти.");
+    } else if (data->region_alerts[DNIPRO_REGION] == 'N') {
+        append_detail(text, sizeof(text), "Тривог не повідомлено.\nДніпропетровська область.");
+    } else if (data->alert_details_state != DASH_DATA_FRESH) {
+        append_detail(text, sizeof(text), "Статус карти актуальний.\n%s\nЧас початку й загрози не підтверджено.",
+                      data->alert_details_updated_us ? "Деталі застаріли." : "Деталі тимчасово недоступні.");
+    } else {
+        if (!screen_alert_details.count) append_detail(text, sizeof(text), "Деталі не надано.\nСтатус карти актуальний.\n");
+        for (unsigned i = 0; i < screen_alert_details.count; ++i) {
+            const dashboard_alert_record_t *r = &screen_alert_details.records[i];
+            append_detail(text, sizeof(text), "%s%s\n%s\n", i ? "\n────────────\n" : "", r->location,
+                          r->level == 'R' ? "Повітряна тривога" : r->level == 'Y' ? "Попередня загроза" : "Рівень не вказано");
+            char clock[6];
+            const int64_t minutes = dashboard_alert_elapsed(r->started_at, (int64_t)time(NULL));
+            if (minutes >= 0 && dashboard_alert_kyiv_clock(r->started_at, clock))
+                append_detail(text, sizeof(text), "Від %s за Києвом · %lld хв\n", clock, (long long)minutes);
+            else append_detail(text, sizeof(text), "Час початку невідомий\n");
+            if (!r->oblast) append_detail(text, sizeof(text), "Локальний запис: не підтверджує\nтривогу для всього міста Дніпро.\n");
+            append_detail(text, sizeof(text), "\nЗагрози:\n");
+            if (!r->threat_count) append_detail(text, sizeof(text), "Деталі не надано\n");
+            for (unsigned t = 0; t < r->threat_count; ++t)
+                append_detail(text, sizeof(text), "• %s\n", dashboard_alert_threat_name(r->threats[t]));
+            if (r->threats_omitted) append_detail(text, sizeof(text), "Ще загроз: %u\n", r->threats_omitted);
+            if (*r->message) append_detail(text, sizeof(text), "\nПовідомлення джерела:\n%s\n", r->message);
+            if (r->text_truncated) append_detail(text, sizeof(text), "Довгий текст скорочено.\n");
+        }
+        if (screen_alert_details.omitted) append_detail(text, sizeof(text), "\nЩе локальних записів: %u\n", screen_alert_details.omitted);
+    }
+    if (data->alert_details_updated_us) append_detail(text, sizeof(text), "\n\nДеталі перевірено %lld хв тому",
+        (long long)((esp_timer_get_time() - data->alert_details_updated_us) / 60000000));
+    append_detail(text, sizeof(text), "\nДжерело: Alerts.in.ua");
+    set_label_if_changed(alert_detail_content, text);
+}
+
+static void add_alert_details_screen(void)
+{
+    button(alert_detail_screen, "‹ Назад", 16, 10, 108, show_screen, home_screen);
+    label(alert_detail_screen, "Деталі тривоги", title_font, text_color, 140, 14);
+    lv_obj_t *scroll = surface(alert_detail_screen, 16, 64, CARD_WIDTH, 400, panel, 12);
+    lv_obj_set_scrollable(scroll, true);
+    lv_obj_set_scroll_dir(scroll, LV_DIR_VER);
+    alert_detail_content = label(scroll, "Очікування даних", body_font, text_color, 12, 12);
+    lv_obj_set_width(alert_detail_content, CARD_WIDTH - 32);
+    lv_label_set_long_mode(alert_detail_content, LV_LABEL_LONG_WRAP);
 }
 
 static void update_remote_data(lv_timer_t *timer)
 {
     dashboard_data_snapshot_t data;
     dashboard_data_snapshot(&data);
+    if (!dashboard_data_alert_details(&screen_alert_details, &data)) data.alert_details_state = DASH_DATA_STALE;
     const int64_t now_ms = esp_timer_get_time() / 1000;
     dashboard_display_idle(&display_mode, now_ms);
     if (dashboard_display_alert(&display_mode, data.alerts_state == DASH_DATA_FRESH,
@@ -763,6 +865,10 @@ static void update_remote_data(lv_timer_t *timer)
     }
     refresh_display_mode();
     lv_obj_t *active = lv_screen_active();
+    if (active == alert_detail_screen) {
+        update_alert_details_screen(&data);
+        return;
+    }
     if (active != home_screen && active != schedule_screen) {
         return;
     }
@@ -773,6 +879,11 @@ static void update_remote_data(lv_timer_t *timer)
     update_clock();
     update_weather_card(&data);
     update_alert_card(&data);
+    map_stale = data.alerts_state != DASH_DATA_FRESH;
+    set_label_if_changed(map_state_note, data.alerts_state == DASH_DATA_FRESH ? "Актуально" :
+                         data.alerts_state == DASH_DATA_NO_TOKEN ? "Потрібен токен" : "Немає свіжих даних");
+    set_label_if_changed(map_stale_note, data.alerts_updated_us ? "Застарілі дані" : "Статус невідомий");
+    lv_obj_set_hidden(map_stale_note, !map_stale);
     ESP_ERROR_CHECK_WITHOUT_ABORT(paint_map(data.region_alerts));
 }
 
@@ -806,6 +917,7 @@ esp_err_t dashboard_screen_create(lv_indev_t *touch, esp_err_t (*set_backlight)(
     schedule_screen = create_screen();
     wifi_screen = create_screen();
     display_settings_screen = create_screen();
+    alert_detail_screen = create_screen();
 
     label(home_screen, "Дніпро", title_font, text_color, 16, 8);
     home_clock = label(home_screen, "--:--", title_font, text_color, 0, 0);
@@ -818,28 +930,46 @@ esp_err_t dashboard_screen_create(lv_indev_t *touch, esp_err_t (*set_backlight)(
     lv_obj_set_style_text_font(home_wifi_status, small_font, 0);
     lv_obj_set_style_text_align(home_wifi_status, LV_TEXT_ALIGN_CENTER, 0);
 
-    lv_obj_t *weather = surface(home_screen, 16, 64, 140, 68, panel, 12);
+    lv_obj_t *weather = surface(home_screen, 16, 64, 140, 88, panel, 12);
     label(weather, "На вулиці", small_font, muted, 12, 3);
     weather_value = label(weather, "— °C", title_font, blue, 12, 18);
     weather_note = label(weather, "", small_font, muted, 12, 49);
 
-    lv_obj_t *local_alert = surface(home_screen, 164, 64, 300, 68, panel, 12);
+    lv_obj_t *local_alert = surface(home_screen, 164, 64, 300, 88, panel, 12);
+    lv_obj_set_clickable(local_alert, true);
+    lv_obj_add_event_cb(local_alert, show_screen, LV_EVENT_CLICKED, alert_detail_screen);
     label(local_alert, "Дніпропетровська область", small_font, muted, 12, 4);
     alert_value = label(local_alert, "Статус невідомий", body_font, muted, 12, 23);
     alert_note = label(local_alert, "", small_font, muted, 12, 49);
+    alert_threat = label(local_alert, "Торкніться для деталей ›", small_font, muted, 12, 67);
+    lv_obj_set_width(alert_value, 276);
+    lv_label_set_long_mode(alert_value, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(alert_note, 276);
+    lv_label_set_long_mode(alert_note, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(alert_threat, 276);
+    lv_label_set_long_mode(alert_threat, LV_LABEL_LONG_DOT);
 
-    lv_obj_t *map = surface(home_screen, 16, 140, CARD_WIDTH, 254, panel, 12);
+    lv_obj_t *map = surface(home_screen, 16, 160, CARD_WIDTH, 234, panel, 12);
     label(map, "Тривоги по областях", body_font, text_color, 12, 5);
-    label(map, "© OSM", small_font, muted, 188, 8);
-    surface(map, 250, 11, 9, 9, 0xBE504C, 3);
-    label(map, "Тривога", small_font, text_color, 264, 7);
-    surface(map, 329, 11, 9, 9, 0xBE944A, 3);
-    label(map, "Частк. / загроза", small_font, text_color, 343, 7);
+    map_state_note = label(map, "Очікування", small_font, muted, 276, 7);
+    surface(map, 12, 33, 9, 9, 0xBE504C, 3);
+    label(map, "Тривога", small_font, text_color, 26, 29);
+    surface(map, 111, 33, 9, 9, 0xBE944A, 3);
+    label(map, "Загроза", small_font, text_color, 125, 29);
+    surface(map, 211, 33, 9, 9, 0xBE944A, 0);
+    surface(map, 213, 33, 2, 9, 0x436078, 0);
+    surface(map, 217, 33, 2, 9, 0x436078, 0);
+    label(map, "Часткова", small_font, text_color, 225, 29);
     const esp_err_t result = add_map(map);
     if (result != ESP_OK) {
         ESP_LOGE("dashboard_screen", "Could not initialize the Ukraine map");
         return result;
     }
+    label(map, "© OSM", small_font, muted, 12, 212);
+    map_stale_note = label(map, "Статус невідомий", body_font, warm, 120, 122);
+    lv_obj_set_style_bg_color(map_stale_note, lv_color_hex(panel), 0);
+    lv_obj_set_style_bg_opa(map_stale_note, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(map_stale_note, 8, 0);
 
     lv_obj_t *power = surface(home_screen, 16, 400, CARD_WIDTH, 68, panel, 12);
     lv_obj_set_clickable(power, true);
@@ -849,6 +979,7 @@ esp_err_t dashboard_screen_create(lv_indev_t *touch, esp_err_t (*set_backlight)(
     energy_home_track = make_outage_track(power, 12, 29, CARD_WIDTH - 24);
 
     add_schedule_screen();
+    add_alert_details_screen();
     add_wifi_screen();
     add_display_settings_screen();
     read_touch = lv_indev_get_read_cb(touch);

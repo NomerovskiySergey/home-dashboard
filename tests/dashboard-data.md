@@ -21,3 +21,16 @@
 cl /nologo /std:c11 /utf-8 /W3 /I"..\main" /I"..\managed_components\espressif__cjson\cJSON" "..\tests\dashboard_data_parse_test.c" "..\main\dashboard_data_parse.c" "..\main\dashboard_energy_parse.c" "..\managed_components\espressif__cjson\cJSON\cJSON.c" /Fe:dashboard_data_parse_test.exe
 .\dashboard_data_parse_test.exe
 ```
+
+## Деталі тривог
+
+У корені проєкту, в Developer PowerShell:
+
+```powershell
+cl /nologo /std:c11 /utf-8 /W4 /D_CRT_SECURE_NO_WARNINGS /I main /I managed_components/espressif__cjson/cJSON tests/dashboard_alert_details_test.c main/dashboard_alert_details.c managed_components/espressif__cjson/cJSON/cJSON.c /Fo:build/ /Fe:build/dashboard_alert_details_test.exe
+.\build\dashboard_alert_details_test.exe
+```
+
+Перевіряються обласні й локальні записи UID 9, фільтрування інших областей і завершених записів, відсутні optional поля, невідомі загрози, збереження попереднього знімка при невалідному JSON, межі записів/загроз/тіла відповіді, UTF-8, UTC і київські переходи доби/DST. HTTP-кеш: 304 без кешу, 200→304 та незалежність endpoint; ліміт: ковзні 60 с, 401 і короткий/довгий Retry-After. Перевірка відповідності деталей поколінню місцевого стану не дозволяє видавати старі деталі за нову тривогу.
+
+На пристрої окремо перевірити 200→304 для обох endpoint, збій тільки деталей, завелику відповідь, втрату/відновлення Wi-Fi й збереження опитування погоди та ЦЕК. Журнал деталей містить лише HTTP-код, результат валідації й розмір тіла, без ключа чи тексту відповіді.

@@ -23,7 +23,7 @@
 #define SECONDS_US(value) (INT64_C(1000000) * (value))
 
 enum { TOKEN_CAPACITY = 257, ENERGY_BODY_CAPACITY = 192 * 1024 };
-typedef enum { SOURCE_WEATHER, SOURCE_ALERTS, SOURCE_ENERGY } data_source_t;
+typedef enum { SOURCE_WEATHER, SOURCE_ALERTS, SOURCE_ENERGY, SOURCE_ALERT_DETAILS } data_source_t;
 
 static const char *const tag = "dashboard_data";
 static const char weather_url[] =
@@ -33,12 +33,20 @@ static const char alerts_url[] =
     "https://api.alerts.in.ua/v2/iot/active_air_raid_alerts_by_oblast.json";
 static const char energy_url[] =
     "https://alerts.energy/api/v1/source-registry/areas/dnipropetrovska-oblast/shutdowns";
+static const char alert_details_url[] = "https://api.alerts.in.ua/v1/alerts/active.json";
+static dashboard_alert_details_t alert_details;
+static dashboard_alert_cache_t map_cache, details_cache;
+static dashboard_alert_rate_t alerts_rate;
+static unsigned map_generation, details_generation;
+static char details_for_status;
+static bool details_urgent = true;
 
 static portMUX_TYPE data_lock = portMUX_INITIALIZER_UNLOCKED;
 static dashboard_data_snapshot_t latest = {
     .weather_state = DASH_DATA_WAITING,
     .alerts_state = DASH_DATA_NO_TOKEN,
     .energy_state = DASH_DATA_NO_TOKEN,
+    .alert_details_state = DASH_DATA_NO_TOKEN,
 };
 
 typedef struct {
@@ -47,11 +55,18 @@ typedef struct {
     size_t length;
     long retry_after;
     bool overflow;
+    const char *if_modified;
+    char modified[80];
 } http_body_t;
 
 static esp_err_t collect_response(esp_http_client_event_t *event)
 {
     http_body_t *body = event->user_data;
+    if (event->event_id == HTTP_EVENT_ON_HEADER && event->header_key && event->header_value &&
+        strcasecmp(event->header_key, "Last-Modified") == 0 &&
+        strlen(event->header_value) < sizeof(body->modified)) {
+        dashboard_alert_copy_text(body->modified, sizeof(body->modified), event->header_value);
+    }
     if (event->event_id == HTTP_EVENT_ON_HEADER && event->header_key && event->header_value &&
         strcasecmp(event->header_key, "Retry-After") == 0) {
         char *end = NULL;
@@ -77,11 +92,12 @@ static int fetch_json(data_source_t source, const char *authorization, http_body
     body->length = 0;
     body->overflow = false;
     body->retry_after = 0;
+    body->modified[0] = 0;
     if (source != SOURCE_WEATHER && !authorization) {
         return 0;
     }
 
-    static const char *const urls[] = { weather_url, alerts_url, energy_url };
+    static const char *const urls[] = { weather_url, alerts_url, energy_url, alert_details_url };
     const esp_http_client_config_t config = {
         .url = urls[source],
         .timeout_ms = source == SOURCE_ENERGY ? 6500 : 4500,
@@ -98,6 +114,9 @@ static int fetch_json(data_source_t source, const char *authorization, http_body
     esp_err_t result = esp_http_client_set_header(client, "Accept", "application/json");
     if (result == ESP_OK && source != SOURCE_WEATHER) {
         result = esp_http_client_set_header(client, "Authorization", authorization);
+    }
+    if (result == ESP_OK && body->if_modified && *body->if_modified) {
+        result = esp_http_client_set_header(client, "If-Modified-Since", body->if_modified);
     }
     if (result == ESP_OK) {
         result = esp_http_client_perform(client);
@@ -165,16 +184,29 @@ static int64_t update_weather(http_body_t *body)
 
 static int64_t update_alerts(const char *authorization, http_body_t *body)
 {
+    body->if_modified = map_cache.valid ? map_cache.modified : NULL;
     const int status = fetch_json(SOURCE_ALERTS, authorization, body);
+    body->if_modified = NULL;
     char regions[DASHBOARD_REGION_COUNT];
-    const bool success = status == 200 && dashboard_parse_alerts(body->text, body->length, regions);
+    const bool parsed = status == 200 && dashboard_parse_alerts(body->text, body->length, regions);
     const int64_t now = esp_timer_get_time();
+    const bool success = dashboard_alert_cache_update(&map_cache, status, parsed, body->modified, now / 1000000);
+    dashboard_alert_rate_pause(&alerts_rate, now / 1000000, status, body->retry_after);
 
     portENTER_CRITICAL(&data_lock);
     latest.alerts_state = success ? DASH_DATA_FRESH
                                   : status == 401 ? DASH_DATA_AUTH_ERROR : DASH_DATA_UNAVAILABLE;
-    if (success) {
+    if (parsed) {
+        if (latest.region_alerts[12] != regions[12]) {
+            ++map_generation;
+            details_urgent = true;
+            details_cache.valid = false;
+            details_cache.modified[0] = 0;
+            latest.alert_details_state = DASH_DATA_STALE;
+        }
         memcpy(latest.region_alerts, regions, sizeof(regions));
+    }
+    if (success) {
         latest.alerts_updated_us = now;
     }
     portEXIT_CRITICAL(&data_lock);
@@ -185,6 +217,30 @@ static int64_t update_alerts(const char *authorization, http_body_t *body)
     }
     ESP_LOGW(tag, "Alerts.in.ua update failed (HTTP %d)", status);
     return now + SECONDS_US(status == 401 || status == 403 ? 300 : status == 429 ? 90 : 30);
+}
+
+static int64_t update_alert_details(const char *authorization, http_body_t *body)
+{
+    /* Static scratch and record-at-a-time parsing keep task stacks bounded. */
+    static dashboard_alert_details_t parsed_details;
+    body->if_modified = details_cache.valid ? details_cache.modified : NULL;
+    const int status = fetch_json(SOURCE_ALERT_DETAILS, authorization, body);
+    body->if_modified = NULL;
+    const bool parsed = status == 200 && dashboard_alert_details_parse(body->text, body->length, &parsed_details);
+    const int64_t now = esp_timer_get_time();
+    const bool success = dashboard_alert_cache_update(&details_cache, status, parsed, body->modified, now / 1000000);
+    dashboard_alert_rate_pause(&alerts_rate, now / 1000000, status, body->retry_after);
+    portENTER_CRITICAL(&data_lock);
+    latest.alert_details_state = success ? DASH_DATA_FRESH : status == 401 ? DASH_DATA_AUTH_ERROR : DASH_DATA_UNAVAILABLE;
+    if (success) {
+        if (parsed) alert_details = parsed_details;
+        details_generation = map_generation;
+        details_for_status = latest.region_alerts[12];
+        latest.alert_details_updated_us = now;
+    }
+    portEXIT_CRITICAL(&data_lock);
+    ESP_LOGI(tag, "Alert details HTTP %d, valid=%d, bytes=%u", status, success, (unsigned)body->length);
+    return now + SECONDS_US(success ? 60 : status == 401 || status == 403 ? 300 : status == 429 ? 90 : 60);
 }
 
 static int64_t update_energy(const char *authorization, http_body_t *body)
@@ -224,12 +280,22 @@ static void data_task(void *argument)
     if (has_token) {
         portENTER_CRITICAL(&data_lock);
         latest.alerts_state = DASH_DATA_WAITING;
+        latest.alert_details_state = DASH_DATA_WAITING;
         portEXIT_CRITICAL(&data_lock);
     }
 
     char normal_storage[2048];
     http_body_t body = { .text = normal_storage, .capacity = sizeof(normal_storage) };
     http_body_t energy_body = {0};
+    http_body_t details_body = { .capacity = DASH_ALERT_BODY_CAPACITY };
+    if (has_token) {
+        details_body.text = heap_caps_malloc(details_body.capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!details_body.text) {
+            portENTER_CRITICAL(&data_lock);
+            latest.alert_details_state = DASH_DATA_UNAVAILABLE;
+            portEXIT_CRITICAL(&data_lock);
+        }
+    }
     if (has_energy_key) {
         energy_body.text = heap_caps_malloc(ENERGY_BODY_CAPACITY, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         energy_body.capacity = ENERGY_BODY_CAPACITY;
@@ -246,6 +312,7 @@ static void data_task(void *argument)
     int64_t next_weather = 0;
     int64_t next_alerts = 0;
     int64_t next_energy = 0;
+    int64_t next_details = 0;
 
     while (true) {
         const bool online = dashboard_wifi_state() == DASH_WIFI_CONNECTED;
@@ -257,10 +324,12 @@ static void data_task(void *argument)
             if (!online_last && next_weather > now + SECONDS_US(60)) {
                 next_weather = now;
             }
+            if (!online_last) { next_alerts = now; next_details = now; }
 
             /* The HTTPS certificate requires a synchronized wall clock. */
             if (time(NULL) >= 1700000000) {
-                if (has_token && now >= next_alerts) {
+                if (has_token && now >= next_alerts &&
+                    dashboard_alert_rate_take(&alerts_rate, esp_timer_get_time() / 1000000)) {
                     next_alerts = update_alerts(authorization, &body);
                 }
                 if (now >= next_weather && dashboard_wifi_state() == DASH_WIFI_CONNECTED) {
@@ -269,6 +338,12 @@ static void data_task(void *argument)
                 if (energy_body.text && now >= next_energy &&
                     dashboard_wifi_state() == DASH_WIFI_CONNECTED) {
                     next_energy = update_energy(energy_authorization, &energy_body);
+                }
+                if (details_body.text && (now >= next_details || details_urgent) &&
+                    dashboard_wifi_state() == DASH_WIFI_CONNECTED &&
+                    dashboard_alert_rate_take(&alerts_rate, esp_timer_get_time() / 1000000)) {
+                    details_urgent = false;
+                    next_details = update_alert_details(authorization, &details_body);
                 }
             }
         }
@@ -281,10 +356,16 @@ void dashboard_data_snapshot(dashboard_data_snapshot_t *out)
 {
     portENTER_CRITICAL(&data_lock);
     *out = latest;
+    if (out->alert_details_updated_us && !dashboard_alert_details_current(latest.region_alerts[12],
+        details_for_status, map_generation, details_generation)) out->alert_details_state = DASH_DATA_STALE;
     portEXIT_CRITICAL(&data_lock);
 
     const int64_t now = esp_timer_get_time();
     const bool online = dashboard_wifi_state() == DASH_WIFI_CONNECTED;
+    if (out->alert_details_updated_us && (!online || out->alert_details_state != DASH_DATA_FRESH ||
+        now - out->alert_details_updated_us > SECONDS_US(150)) && out->alert_details_state != DASH_DATA_AUTH_ERROR) {
+        out->alert_details_state = DASH_DATA_STALE;
+    }
     if (out->weather_updated_us && (!online || out->weather_state != DASH_DATA_FRESH ||
                                     now - out->weather_updated_us > SECONDS_US(1200))) {
         out->weather_state = DASH_DATA_STALE;
@@ -299,6 +380,16 @@ void dashboard_data_snapshot(dashboard_data_snapshot_t *out)
         out->energy_state != DASH_DATA_AUTH_ERROR) {
         out->energy_state = DASH_DATA_STALE;
     }
+}
+
+bool dashboard_data_alert_details(dashboard_alert_details_t *out, const dashboard_data_snapshot_t *expected)
+{
+    portENTER_CRITICAL(&data_lock);
+    const bool same_snapshot = latest.alert_details_updated_us == expected->alert_details_updated_us &&
+                               latest.region_alerts[12] == expected->region_alerts[12];
+    *out = alert_details;
+    portEXIT_CRITICAL(&data_lock);
+    return same_snapshot;
 }
 
 esp_err_t dashboard_data_start(void)
