@@ -23,7 +23,7 @@
 #define SECONDS_US(value) (INT64_C(1000000) * (value))
 
 enum { TOKEN_CAPACITY = 257, ENERGY_BODY_CAPACITY = 192 * 1024 };
-typedef enum { SOURCE_WEATHER, SOURCE_ALERTS, SOURCE_ENERGY, SOURCE_ALERT_DETAILS } data_source_t;
+typedef enum { SOURCE_WEATHER, SOURCE_ALERTS, SOURCE_ENERGY, SOURCE_ALERT_DETAILS, SOURCE_ALERT_HISTORY } data_source_t;
 
 static const char *const tag = "dashboard_data";
 static const char weather_url[] =
@@ -40,6 +40,10 @@ static dashboard_alert_rate_t alerts_rate;
 static unsigned map_generation, details_generation;
 static char details_for_status;
 static bool details_urgent = true;
+static const char alert_history_url[] = "https://api.alerts.in.ua/v1/regions/9/alerts/month_ago.json";
+static dashboard_alert_history_t alert_history;
+static dashboard_history_request_t history_request;
+static bool history_has_token;
 
 static portMUX_TYPE data_lock = portMUX_INITIALIZER_UNLOCKED;
 static dashboard_data_snapshot_t latest = {
@@ -47,12 +51,14 @@ static dashboard_data_snapshot_t latest = {
     .alerts_state = DASH_DATA_NO_TOKEN,
     .energy_state = DASH_DATA_NO_TOKEN,
     .alert_details_state = DASH_DATA_NO_TOKEN,
+    .alert_history_state = DASH_DATA_NO_TOKEN,
 };
 
 typedef struct {
     char *text;
     size_t capacity;
     size_t length;
+    size_t received_length;
     long retry_after;
     bool overflow;
     const char *if_modified;
@@ -77,6 +83,7 @@ static esp_err_t collect_response(esp_http_client_event_t *event)
     }
     if (event->event_id == HTTP_EVENT_ON_DATA && event->data_len > 0) {
         const size_t size = (size_t)event->data_len;
+        body->received_length += size;
         if (size >= body->capacity - body->length) {
             body->overflow = true;
         } else if (!body->overflow) {
@@ -90,6 +97,7 @@ static esp_err_t collect_response(esp_http_client_event_t *event)
 static int fetch_json(data_source_t source, const char *authorization, http_body_t *body)
 {
     body->length = 0;
+    body->received_length = 0;
     body->overflow = false;
     body->retry_after = 0;
     body->modified[0] = 0;
@@ -97,10 +105,10 @@ static int fetch_json(data_source_t source, const char *authorization, http_body
         return 0;
     }
 
-    static const char *const urls[] = { weather_url, alerts_url, energy_url, alert_details_url };
+    static const char *const urls[] = { weather_url, alerts_url, energy_url, alert_details_url, alert_history_url };
     const esp_http_client_config_t config = {
         .url = urls[source],
-        .timeout_ms = source == SOURCE_ENERGY ? 6500 : 4500,
+        .timeout_ms = source == SOURCE_ENERGY || source == SOURCE_ALERT_HISTORY ? 6500 : 4500,
         .disable_auto_redirect = true,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .event_handler = collect_response,
@@ -271,16 +279,54 @@ static int64_t update_energy(const char *authorization, http_body_t *body)
     return now + SECONDS_US(status == 401 || status == 403 ? 900 : 120);
 }
 
+static void update_alert_history(const char *authorization)
+{
+    static dashboard_alert_history_t parsed_history;
+    http_body_t body = { .capacity = DASH_HISTORY_BODY_CAPACITY };
+    body.text = heap_caps_malloc(body.capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    body.if_modified = history_request.cache.valid ? history_request.cache.modified : NULL;
+    const int status = body.text ? fetch_json(SOURCE_ALERT_HISTORY, authorization, &body) : 0;
+    const bool decoded = status == 200 && dashboard_alert_history_parse(body.text, body.length, &parsed_history);
+    const bool parsed = decoded && (parsed_history.count || !parsed_history.air_raids);
+    const int64_t now = esp_timer_get_time();
+    dashboard_alert_rate_pause(&alerts_rate, now / 1000000, status, body.retry_after);
+    portENTER_CRITICAL(&data_lock);
+    const bool success = dashboard_history_complete(&history_request, status, parsed, body.modified, now / 1000000);
+    latest.alert_history_state = success ? DASH_DATA_FRESH : status == 401 ? DASH_DATA_AUTH_ERROR : DASH_DATA_UNAVAILABLE;
+    if (success) {
+        if (parsed) alert_history = parsed_history;
+        latest.alert_history_updated_us = now;
+    }
+    const unsigned count = alert_history.count;
+    portEXIT_CRITICAL(&data_lock);
+    heap_caps_free(body.text);
+    ESP_LOGI(tag, "Alert history HTTP %d, valid=%d, bytes=%u, received=%u, records=%u", status, success,
+             (unsigned)body.length, (unsigned)body.received_length, count);
+    if (decoded && !parsed_history.count && parsed_history.scanned) {
+        ESP_LOGI(tag, "History schema: rows=%u air=%u type=%.31s uid=%.31s oblast=%.31s",
+                 parsed_history.scanned, parsed_history.air_raids, parsed_history.first_type,
+                 parsed_history.first_uid, parsed_history.first_oblast_uid);
+        ESP_LOGI(tag, "History names: location=%.95s oblast=%.95s",
+                 parsed_history.first_location, parsed_history.first_oblast);
+    } else if (success && count) {
+        ESP_LOGI(tag, "History location: %.95s", parsed_history.records[0].location);
+    }
+}
+
 static void data_task(void *argument)
 {
     char authorization[sizeof("Bearer ") + TOKEN_CAPACITY];
     const bool has_token = read_bearer("dash_keys", "alerts_token", authorization);
+    portENTER_CRITICAL(&data_lock);
+    history_has_token = has_token;
+    portEXIT_CRITICAL(&data_lock);
     char energy_authorization[sizeof("Bearer ") + TOKEN_CAPACITY];
     const bool has_energy_key = read_bearer("energy_keys", "energy_key", energy_authorization);
     if (has_token) {
         portENTER_CRITICAL(&data_lock);
         latest.alerts_state = DASH_DATA_WAITING;
         latest.alert_details_state = DASH_DATA_WAITING;
+        latest.alert_history_state = DASH_DATA_WAITING;
         portEXIT_CRITICAL(&data_lock);
     }
 
@@ -345,6 +391,13 @@ static void data_task(void *argument)
                     details_urgent = false;
                     next_details = update_alert_details(authorization, &details_body);
                 }
+                /* History is on demand and runs after the live sources. */
+                const bool history_online = dashboard_wifi_state() == DASH_WIFI_CONNECTED;
+                portENTER_CRITICAL(&data_lock);
+                const bool run_history = has_token && dashboard_history_begin(&history_request, &alerts_rate,
+                    esp_timer_get_time() / 1000000, history_online);
+                portEXIT_CRITICAL(&data_lock);
+                if (run_history) update_alert_history(authorization);
             }
         }
         online_last = online;
@@ -362,6 +415,11 @@ void dashboard_data_snapshot(dashboard_data_snapshot_t *out)
 
     const int64_t now = esp_timer_get_time();
     const bool online = dashboard_wifi_state() == DASH_WIFI_CONNECTED;
+    if (out->alert_history_updated_us && (!online || out->alert_history_state != DASH_DATA_FRESH ||
+        now - out->alert_history_updated_us >= SECONDS_US(DASH_HISTORY_TTL_S)) &&
+        out->alert_history_state != DASH_DATA_AUTH_ERROR && out->alert_history_state != DASH_DATA_WAITING) {
+        out->alert_history_state = DASH_DATA_STALE;
+    }
     if (out->alert_details_updated_us && (!online || out->alert_details_state != DASH_DATA_FRESH ||
         now - out->alert_details_updated_us > SECONDS_US(150)) && out->alert_details_state != DASH_DATA_AUTH_ERROR) {
         out->alert_details_state = DASH_DATA_STALE;
@@ -388,6 +446,31 @@ bool dashboard_data_alert_details(dashboard_alert_details_t *out, const dashboar
     const bool same_snapshot = latest.alert_details_updated_us == expected->alert_details_updated_us &&
                                latest.region_alerts[12] == expected->region_alerts[12];
     *out = alert_details;
+    portEXIT_CRITICAL(&data_lock);
+    return same_snapshot;
+}
+
+void dashboard_data_request_alert_history(void)
+{
+    const bool online = dashboard_wifi_state() == DASH_WIFI_CONNECTED;
+    const int64_t now_s = esp_timer_get_time() / 1000000;
+    portENTER_CRITICAL(&data_lock);
+    if (history_has_token && online && dashboard_history_open(&history_request, now_s))
+        latest.alert_history_state = DASH_DATA_WAITING;
+    else if (history_has_token && online && history_request.cache.valid && !history_request.failed &&
+             !history_request.pending && !history_request.in_flight &&
+             now_s - history_request.cache.checked_s < DASH_HISTORY_TTL_S)
+        latest.alert_history_state = DASH_DATA_FRESH;
+    else if (history_has_token && !online)
+        latest.alert_history_state = DASH_DATA_UNAVAILABLE;
+    portEXIT_CRITICAL(&data_lock);
+}
+
+bool dashboard_data_alert_history(dashboard_alert_history_t *out, const dashboard_data_snapshot_t *expected)
+{
+    portENTER_CRITICAL(&data_lock);
+    const bool same_snapshot = latest.alert_history_updated_us == expected->alert_history_updated_us;
+    *out = alert_history;
     portEXIT_CRITICAL(&data_lock);
     return same_snapshot;
 }

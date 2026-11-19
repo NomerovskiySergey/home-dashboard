@@ -68,6 +68,10 @@ static lv_obj_t *map_state_note;
 static lv_obj_t *map_stale_note;
 static bool map_stale;
 static dashboard_alert_details_t screen_alert_details;
+static lv_obj_t *alert_history_screen;
+static lv_obj_t *alert_history_content;
+static lv_obj_t *alert_history_note;
+static dashboard_alert_history_t screen_alert_history;
 
 static lv_obj_t *energy_home_track;
 static lv_obj_t *energy_home_note;
@@ -815,7 +819,7 @@ static void update_alert_details_screen(const dashboard_data_snapshot_t *data)
         if (!screen_alert_details.count) append_detail(text, sizeof(text), "Деталі не надано.\nСтатус карти актуальний.\n");
         for (unsigned i = 0; i < screen_alert_details.count; ++i) {
             const dashboard_alert_record_t *r = &screen_alert_details.records[i];
-            append_detail(text, sizeof(text), "%s%s\n%s\n", i ? "\n────────────\n" : "", r->location,
+            append_detail(text, sizeof(text), "%s%s\n%s\n", i ? "\n\n" : "", r->location,
                           r->level == 'R' ? "Повітряна тривога" : r->level == 'Y' ? "Попередня загроза" : "Рівень не вказано");
             char clock[6];
             const int64_t minutes = dashboard_alert_elapsed(r->started_at, (int64_t)time(NULL));
@@ -839,13 +843,86 @@ static void update_alert_details_screen(const dashboard_data_snapshot_t *data)
     set_label_if_changed(alert_detail_content, text);
 }
 
+static void open_alert_history(lv_event_t *event)
+{
+    (void)event;
+    dashboard_data_request_alert_history();
+    lv_screen_load(alert_history_screen);
+}
+
+static void update_alert_history_screen(const dashboard_data_snapshot_t *data)
+{
+    const bool coherent = dashboard_data_alert_history(&screen_alert_history, data);
+    const dashboard_data_state_t state = coherent ? data->alert_history_state : DASH_DATA_STALE;
+    char note[128];
+    if (state == DASH_DATA_WAITING) {
+        snprintf(note, sizeof(note), "%s%s", data->alert_history_updated_us ? "Збережена копія · " : "",
+                 dashboard_wifi_state() == DASH_WIFI_CONNECTED ? "Очікування оновлення…" : "Очікування Wi-Fi");
+    } else if (state == DASH_DATA_NO_TOKEN) {
+        snprintf(note, sizeof(note), "Потрібен токен Alerts.in.ua");
+    } else if (state == DASH_DATA_AUTH_ERROR) {
+        snprintf(note, sizeof(note), "Токен не прийнято%s", data->alert_history_updated_us ? " · збережена копія" : "");
+    } else if (data->alert_history_updated_us) {
+        snprintf(note, sizeof(note), "%s · перевірено %lld хв тому",
+                 state == DASH_DATA_FRESH ? "Кеш" : "Застаріла копія",
+                 (long long)((esp_timer_get_time() - data->alert_history_updated_us) / 60000000));
+    } else {
+        snprintf(note, sizeof(note), "Історія недоступна · спробуйте відкрити пізніше");
+    }
+    set_label_if_changed(alert_history_note, note);
+    static char text[8192];
+    text[0] = 0;
+    if (data->alert_history_updated_us && coherent) {
+        if (!screen_alert_history.count) append_detail(text, sizeof(text), "За доступний місячний період\nзаписів повітряних тривог не знайдено.");
+        for (unsigned i = 0; i < screen_alert_history.count; ++i) {
+            char row[512];
+            dashboard_alert_history_format(&screen_alert_history.records[i], (int64_t)time(NULL), row, sizeof(row));
+            append_detail(text, sizeof(text), "%s%s\n", i ? "\n\n" : "", row);
+        }
+        append_detail(text, sizeof(text), "\nОстанні записи за місячний період.\nЧас за Києвом · Alerts.in.ua\nІсторія не визначає поточний стан карти.");
+    } else if (state == DASH_DATA_WAITING) {
+        append_detail(text, sizeof(text), "Завантаження історії…");
+    } else {
+        append_detail(text, sizeof(text), "Немає перевіреної історії.\nПоверніться та відкрийте її пізніше.");
+    }
+    set_label_if_changed(alert_history_content, text);
+}
+
+static void alert_scroll_end(lv_event_t *event)
+{
+    lv_obj_t *object = lv_event_get_target_obj(event);
+    ESP_LOGI("dashboard_scroll", "%s y=%ld", (const char *)lv_event_get_user_data(event),
+             (long)lv_obj_get_scroll_y(object));
+}
+
+static void add_alert_history_screen(void)
+{
+    button(alert_history_screen, "‹ Назад", 16, 10, 108, show_screen, alert_detail_screen);
+    label(alert_history_screen, "Історія тривог", title_font, text_color, 140, 14);
+    alert_history_note = label(alert_history_screen, "", small_font, muted, 16, 59);
+    lv_obj_set_width(alert_history_note, CARD_WIDTH);
+    lv_label_set_long_mode(alert_history_note, LV_LABEL_LONG_WRAP);
+    lv_obj_t *scroll = surface(alert_history_screen, 16, 103, CARD_WIDTH, 361, panel, 12);
+    /* surface() disables hit testing; a scroll viewport must receive the drag. */
+    lv_obj_set_clickable(scroll, true);
+    lv_obj_set_scrollable(scroll, true);
+    lv_obj_set_scroll_dir(scroll, LV_DIR_VER);
+    lv_obj_add_event_cb(scroll, alert_scroll_end, LV_EVENT_SCROLL_END, "history");
+    alert_history_content = label(scroll, "Очікування даних", body_font, text_color, 12, 12);
+    lv_obj_set_width(alert_history_content, CARD_WIDTH - 32);
+    lv_label_set_long_mode(alert_history_content, LV_LABEL_LONG_WRAP);
+}
+
 static void add_alert_details_screen(void)
 {
     button(alert_detail_screen, "‹ Назад", 16, 10, 108, show_screen, home_screen);
-    label(alert_detail_screen, "Деталі тривоги", title_font, text_color, 140, 14);
+    label(alert_detail_screen, "Деталі", title_font, text_color, 140, 14);
+    button(alert_detail_screen, "Історія", 350, 10, 114, open_alert_history, NULL);
     lv_obj_t *scroll = surface(alert_detail_screen, 16, 64, CARD_WIDTH, 400, panel, 12);
+    lv_obj_set_clickable(scroll, true);
     lv_obj_set_scrollable(scroll, true);
     lv_obj_set_scroll_dir(scroll, LV_DIR_VER);
+    lv_obj_add_event_cb(scroll, alert_scroll_end, LV_EVENT_SCROLL_END, "details");
     alert_detail_content = label(scroll, "Очікування даних", body_font, text_color, 12, 12);
     lv_obj_set_width(alert_detail_content, CARD_WIDTH - 32);
     lv_label_set_long_mode(alert_detail_content, LV_LABEL_LONG_WRAP);
@@ -865,6 +942,10 @@ static void update_remote_data(lv_timer_t *timer)
     }
     refresh_display_mode();
     lv_obj_t *active = lv_screen_active();
+    if (active == alert_history_screen) {
+        update_alert_history_screen(&data);
+        return;
+    }
     if (active == alert_detail_screen) {
         update_alert_details_screen(&data);
         return;
@@ -918,6 +999,7 @@ esp_err_t dashboard_screen_create(lv_indev_t *touch, esp_err_t (*set_backlight)(
     wifi_screen = create_screen();
     display_settings_screen = create_screen();
     alert_detail_screen = create_screen();
+    alert_history_screen = create_screen();
 
     label(home_screen, "Дніпро", title_font, text_color, 16, 8);
     home_clock = label(home_screen, "--:--", title_font, text_color, 0, 0);
@@ -980,6 +1062,7 @@ esp_err_t dashboard_screen_create(lv_indev_t *touch, esp_err_t (*set_backlight)(
 
     add_schedule_screen();
     add_alert_details_screen();
+    add_alert_history_screen();
     add_wifi_screen();
     add_display_settings_screen();
     read_touch = lv_indev_get_read_cb(touch);

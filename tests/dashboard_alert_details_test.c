@@ -30,6 +30,9 @@ static void parse_cases(void)
     assert(!dashboard_alert_details_parse("{\"alerts\":[],\"bad\":}", strlen("{\"alerts\":[],\"bad\":}"), &out));
     assert(dashboard_alert_details_parse("{\"alerts\":[]}", 13, &out) && out.count == 0);
     assert(!dashboard_alert_details_parse("{\"alerts\":[1]}", 14, &out));
+    const char numeric[]="{\"alerts\":[{\"location_uid\":9,\"location_type\":\"oblast\",\"alert_type\":\"air_raid\"}]}";
+    assert(dashboard_alert_details_parse(numeric,strlen(numeric),&out));
+    assert(out.count==1 && out.records[0].oblast);
 }
 
 static void bounds_and_time(void)

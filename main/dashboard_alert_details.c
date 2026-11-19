@@ -49,9 +49,9 @@ int64_t dashboard_alert_parse_utc(const char *text)
 int64_t dashboard_alert_elapsed(int64_t started, int64_t now)
 { return started>0 && now>=started ? (now-started)/60 : -1; }
 
-bool dashboard_alert_kyiv_clock(int64_t utc, char out[6])
+static int64_t kyiv_local_epoch(int64_t utc)
 {
-    if (utc <= 0 || utc >= INT64_C(4133980800)) return false;
+    if (utc <= 0 || utc >= INT64_C(4133980800)) return 0;
     /* Same last-Sunday EU rule as dashboard.c's EET-2EEST TZ configuration. */
     int year=1970;
     int64_t year_day=0;
@@ -60,10 +60,36 @@ bool dashboard_alert_kyiv_clock(int64_t utc, char out[6])
     const int64_t october31=year_day+273+leap(year)+30;
     const int64_t summer_start=(march31-(march31+4)%7)*86400+3600;
     const int64_t summer_end=(october31-(october31+4)%7)*86400+3600;
-    const int64_t local=utc+((utc>=summer_start && utc<summer_end) ? 10800 : 7200);
+    return utc+((utc>=summer_start && utc<summer_end) ? 10800 : 7200);
+}
+
+bool dashboard_alert_kyiv_clock(int64_t utc, char out[6])
+{
+    const int64_t local=kyiv_local_epoch(utc);
+    if (!local) return false;
     const int hour=(int)(local/3600%24),minute=(int)(local/60%60);
     out[0]=(char)('0'+hour/10); out[1]=(char)('0'+hour%10); out[2]=':';
     out[3]=(char)('0'+minute/10); out[4]=(char)('0'+minute%10); out[5]=0;
+    return true;
+}
+
+bool dashboard_alert_kyiv_datetime(int64_t utc, char out[17])
+{
+    const int64_t local=kyiv_local_epoch(utc);
+    if (!local) return false;
+    int year=1970,month=1;
+    int64_t day=local/86400;
+    while (day>=365+leap(year)) { day-=365+leap(year); ++year; }
+    static const unsigned days[]={31,28,31,30,31,30,31,31,30,31,30,31};
+    while (day>=days[month-1]+(month==2 && leap(year))) {
+        day-=days[month-1]+(month==2 && leap(year)); ++month;
+    }
+    const int date=(int)day+1;
+    out[0]=(char)('0'+date/10); out[1]=(char)('0'+date%10); out[2]='.';
+    out[3]=(char)('0'+month/10); out[4]=(char)('0'+month%10); out[5]='.';
+    out[6]=(char)('0'+year/1000%10); out[7]=(char)('0'+year/100%10);
+    out[8]=(char)('0'+year/10%10); out[9]=(char)('0'+year%10); out[10]=' ';
+    dashboard_alert_kyiv_clock(utc,out+11);
     return true;
 }
 
@@ -78,17 +104,33 @@ static const char *field(const cJSON *item,const char *key)
     return cJSON_IsString(v) ? v->valuestring : "";
 }
 
+bool dashboard_alert_uid_is(const cJSON *item,const char *key,unsigned uid)
+{
+    const cJSON *value=cJSON_GetObjectItemCaseSensitive(item,key);
+    if (cJSON_IsNumber(value)) return value->valuedouble==(double)uid;
+    char expected[16];
+    snprintf(expected,sizeof(expected),"%u",uid);
+    return cJSON_IsString(value) && !strcmp(value->valuestring,expected);
+}
+
+bool dashboard_alert_is_local(const cJSON *item)
+{
+    const char *oblast=field(item,"location_oblast");
+    if (*oblast) return !strcmp(oblast,"Дніпропетровська область");
+    if (!strcmp(field(item,"location_title"),"Дніпропетровська область")) return true;
+    return dashboard_alert_uid_is(item,"location_uid",9) || dashboard_alert_uid_is(item,"location_oblast_uid",9);
+}
+
 static void record(const cJSON *item,dashboard_alert_details_t *out)
 {
-    if (strcmp(field(item,"alert_type"),"air_raid") ||
-        (strcmp(field(item,"location_uid"),"9") && strcmp(field(item,"location_oblast_uid"),"9"))) return;
+    if (strcmp(field(item,"alert_type"),"air_raid") || !dashboard_alert_is_local(item)) return;
     const cJSON *finished=cJSON_GetObjectItemCaseSensitive(item,"finished_at");
     if (finished && !cJSON_IsNull(finished)) return;
     if (out->count==DASH_ALERT_RECORDS) { ++out->omitted; return; }
     dashboard_alert_record_t *r=&out->records[out->count++];
     const char *location=field(item,"location_title");
     dashboard_alert_copy_text(r->location,sizeof(r->location),*location ? location : "Локацію не вказано");
-    r->oblast=!strcmp(field(item,"location_type"),"oblast") && !strcmp(field(item,"location_uid"),"9");
+    r->oblast=!strcmp(field(item,"location_type"),"oblast");
     r->level=!strcmp(field(item,"alert_level"),"red") ? 'R' : !strcmp(field(item,"alert_level"),"yellow") ? 'Y' : 0;
     r->started_at=dashboard_alert_parse_utc(field(item,"started_at"));
     const char *message=field(item,"notes");
@@ -134,13 +176,12 @@ static cJSON *parse_value(const char *p,const char *end)
     return item;
 }
 
-bool dashboard_alert_details_parse(const char *body,size_t length,dashboard_alert_details_t *out)
+bool dashboard_alert_visit(const char *body,size_t length,size_t capacity,
+                           dashboard_alert_visitor_t visitor,void *context)
 {
-    if (!body || !out || length>=DASH_ALERT_BODY_CAPACITY) return false;
+    if (!body || !visitor || length>=capacity) return false;
     const char *end=body+length,*p=space(body,end);
     if (p==end || *p++!='{') return false;
-    dashboard_alert_details_t *parsed=calloc(1,sizeof(*parsed));
-    if (!parsed) return false;
     bool found=false,valid=false;
     for (;;) {
         p=space(p,end);
@@ -161,7 +202,7 @@ bool dashboard_alert_details_parse(const char *body,size_t length,dashboard_aler
                 const char *next=value_end(p,end);
                 cJSON *item=parse_value(p,next);
                 if (!cJSON_IsObject(item)) { cJSON_Delete(item); goto done; }
-                record(item,parsed); cJSON_Delete(item);
+                visitor(item,context); cJSON_Delete(item);
                 p=space(next,end);
                 if (p==end) goto done;
                 if (*p==']') break;
@@ -181,6 +222,17 @@ bool dashboard_alert_details_parse(const char *body,size_t length,dashboard_aler
         if (*p++!=',') break;
     }
 done:
+    return valid;
+}
+
+static void visit_details(const cJSON *item,void *context) { record(item,context); }
+
+bool dashboard_alert_details_parse(const char *body,size_t length,dashboard_alert_details_t *out)
+{
+    if (!out) return false;
+    dashboard_alert_details_t *parsed=calloc(1,sizeof(*parsed));
+    if (!parsed) return false;
+    const bool valid=dashboard_alert_visit(body,length,DASH_ALERT_BODY_CAPACITY,visit_details,parsed);
     if (valid) *out=*parsed;
     free(parsed);
     return valid;

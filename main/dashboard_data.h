@@ -6,6 +6,7 @@
 
 #include "dashboard_data_parse.h"
 #include "dashboard_alert_details.h"
+#include "dashboard_alert_history.h"
 
 typedef enum {
     DASH_DATA_WAITING,
@@ -25,6 +26,8 @@ typedef struct {
     char region_alerts[DASHBOARD_REGION_COUNT];
     dashboard_data_state_t alert_details_state;
     int64_t alert_details_updated_us;
+    dashboard_data_state_t alert_history_state;
+    int64_t alert_history_updated_us;
     dashboard_data_state_t energy_state;
     int64_t energy_updated_us;
     dashboard_energy_schedule_t energy;
@@ -34,3 +37,5 @@ esp_err_t dashboard_data_start(void);
 void dashboard_data_snapshot(dashboard_data_snapshot_t *out);
 /* Separate copy avoids putting the bounded detail records on the LVGL task stack. */
 bool dashboard_data_alert_details(dashboard_alert_details_t *out, const dashboard_data_snapshot_t *expected);
+void dashboard_data_request_alert_history(void);
+bool dashboard_data_alert_history(dashboard_alert_history_t *out, const dashboard_data_snapshot_t *expected);

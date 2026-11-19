@@ -37,6 +37,13 @@ void dashboard_alert_copy_text(char *out, size_t capacity, const char *text);
 int64_t dashboard_alert_parse_utc(const char *text);
 int64_t dashboard_alert_elapsed(int64_t started, int64_t now);
 bool dashboard_alert_kyiv_clock(int64_t utc, char out[6]);
+bool dashboard_alert_kyiv_datetime(int64_t utc, char out[17]);
+struct cJSON;
+typedef void (*dashboard_alert_visitor_t)(const struct cJSON *item, void *context);
+bool dashboard_alert_uid_is(const struct cJSON *item, const char *key, unsigned uid);
+bool dashboard_alert_is_local(const struct cJSON *item);
+bool dashboard_alert_visit(const char *body, size_t length, size_t capacity,
+                           dashboard_alert_visitor_t visitor, void *context);
 const char *dashboard_alert_threat_name(unsigned type);
 const dashboard_alert_record_t *dashboard_alert_primary(const dashboard_alert_details_t *details, char status);
 bool dashboard_alert_cache_update(dashboard_alert_cache_t *cache, int status, bool parsed,
