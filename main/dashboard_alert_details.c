@@ -123,9 +123,56 @@ bool dashboard_alert_is_local(const cJSON *item)
 
 static void record(const cJSON *item,dashboard_alert_details_t *out)
 {
-    if (strcmp(field(item,"alert_type"),"air_raid") || !dashboard_alert_is_local(item)) return;
+    if (strcmp(field(item,"alert_type"),"air_raid")) return;
     const cJSON *finished=cJSON_GetObjectItemCaseSensitive(item,"finished_at");
     if (finished && !cJSON_IsNull(finished)) return;
+    /* API oblast UID is different from ISO map index. Cities/raions carry a parent UID. */
+    static const uint8_t iso_by_uid[32] = {
+        [3]=68,[4]=5,[5]=56,[8]=7,[9]=12,[10]=18,[11]=21,[12]=23,
+        [13]=26,[14]=32,[15]=35,[16]=9,[17]=48,[18]=51,[19]=53,[20]=59,
+        [21]=61,[22]=63,[23]=65,[24]=71,[25]=74,[26]=77,[27]=46,[28]=14,
+        [29]=43,[30]=40,[31]=30,
+    };
+    static const char *const name_by_uid[32] = {
+        [3]="Хмельницька область",[4]="Вінницька область",[5]="Рівненська область",
+        [8]="Волинська область",[9]="Дніпропетровська область",[10]="Житомирська область",
+        [11]="Закарпатська область",[12]="Запорізька область",[13]="Івано-Франківська область",
+        [14]="Київська область",[15]="Кіровоградська область",[16]="Луганська область",
+        [17]="Миколаївська область",[18]="Одеська область",[19]="Полтавська область",
+        [20]="Сумська область",[21]="Тернопільська область",[22]="Харківська область",
+        [23]="Херсонська область",[24]="Черкаська область",[25]="Чернігівська область",
+        [26]="Чернівецька область",[27]="Львівська область",[28]="Донецька область",
+        [29]="Автономна Республіка Крим",[30]="м. Севастополь",[31]="м. Київ",
+    };
+    unsigned region = 0;
+    const bool oblast = !strcmp(field(item,"location_type"),"oblast");
+    const char *key = oblast
+                      ? "location_uid" : "location_oblast_uid";
+    const char *name = field(item,"location_oblast");
+    if (!*name && oblast) name = field(item,"location_title");
+    for (unsigned uid = 3; uid < 32; ++uid) {
+        if (name_by_uid[uid] && (*name ? !strcmp(name,name_by_uid[uid]) : dashboard_alert_uid_is(item,key,uid))) {
+            region = iso_by_uid[uid];
+            break;
+        }
+    }
+    /* Kyiv/Sevastopol are independent map territories even when typed as cities. */
+    const char *title = field(item,"location_title");
+    if (!strcmp(title,"м. Київ") || (!strcmp(field(item,"location_type"),"city") && !strcmp(title,"Київ"))) region = 30;
+    else if (!strcmp(title,"м. Севастополь") || (!strcmp(field(item,"location_type"),"city") && !strcmp(title,"Севастополь"))) region = 40;
+    else if (!*name) {
+        if (dashboard_alert_uid_is(item,"location_uid",31)) region = 30;
+        if (dashboard_alert_uid_is(item,"location_uid",30)) region = 40;
+    }
+    const cJSON *all_threats = cJSON_GetObjectItemCaseSensitive(item,"threats"), *entry;
+    if (region) cJSON_ArrayForEach(entry,all_threats) {
+        if (!cJSON_IsObject(entry)) continue;
+        unsigned type = 0;
+        for (unsigned i=1;i<sizeof(threat_codes)/sizeof(threat_codes[0]);++i)
+            if (!strcmp(field(entry,"threat_type"),threat_codes[i])) type=i;
+        out->region_threats[region] |= (uint16_t)(1u << type);
+    }
+    if (!dashboard_alert_is_local(item)) return;
     if (out->count==DASH_ALERT_RECORDS) { ++out->omitted; return; }
     dashboard_alert_record_t *r=&out->records[out->count++];
     const char *location=field(item,"location_title");

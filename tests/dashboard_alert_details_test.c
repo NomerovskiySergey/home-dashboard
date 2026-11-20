@@ -102,4 +102,37 @@ static void cache_and_rate(void)
     puts("Alert details, UTC time, cache and shared rate tests passed");
 }
 
-int main(void) { parse_cases(); bounds_and_time(); cache_and_rate(); return 0; }
+static void nationwide_threats(void)
+{
+    dashboard_alert_details_t out = {0};
+    const char json[] = "{\"alerts\":["
+        "{\"location_uid\":\"22\",\"location_type\":\"oblast\",\"alert_type\":\"air_raid\","
+        "\"threats\":[{\"threat_type\":\"drones\"},{\"threat_type\":\"cruise_missiles\"}]},"
+        "{\"location_uid\":124,\"location_oblast_uid\":22,\"location_type\":\"city\",\"alert_type\":\"air_raid\","
+        "\"threats\":[{\"threat_type\":\"drones\"},{\"threat_type\":\"future\"}]},"
+        "{\"location_uid\":\"9\",\"location_type\":\"oblast\",\"alert_type\":\"air_raid\","
+        "\"finished_at\":\"2026-11-20T00:00:00Z\",\"threats\":[{\"threat_type\":\"drones\"}]}]}";
+    assert(dashboard_alert_details_parse(json, strlen(json), &out));
+    assert(out.region_threats[63] == ((1u << 7) | (1u << 5) | 1u));
+    assert(out.region_threats[12] == 0);
+    assert(out.count == 0);
+    const char city[] = "{\"alerts\":[{\"location_uid\":31,\"location_type\":\"city\","
+        "\"alert_type\":\"air_raid\",\"threats\":[{\"threat_type\":\"drones\"}]}]}";
+    assert(dashboard_alert_details_parse(city, strlen(city), &out));
+    assert(out.region_threats[30] == (1u << 7) && out.region_threats[32] == 0);
+    const char named[] = "{\"alerts\":[{\"location_uid\":9,\"location_type\":\"oblast\","
+        "\"location_oblast\":\"Харківська область\",\"alert_type\":\"air_raid\","
+        "\"threats\":[{\"threat_type\":\"drones\"}]}]}";
+    assert(dashboard_alert_details_parse(named, strlen(named), &out));
+    assert(out.region_threats[63] == (1u << 7) && out.region_threats[12] == 0);
+    const char kyiv[] = "{\"alerts\":[{\"location_uid\":999,\"location_type\":\"city\","
+        "\"location_title\":\"м. Київ\",\"location_oblast\":\"Київська область\",\"alert_type\":\"air_raid\","
+        "\"threats\":[{\"threat_type\":\"drones\"}]}]}";
+    assert(dashboard_alert_details_parse(kyiv, strlen(kyiv), &out));
+    assert(out.region_threats[30] == (1u << 7) && out.region_threats[32] == 0);
+    const char empty[] = "{\"alerts\":[]}";
+    assert(dashboard_alert_details_parse(empty, strlen(empty), &out));
+    assert(out.region_threats[63] == 0);
+}
+
+int main(void) { parse_cases(); bounds_and_time(); cache_and_rate(); nationwide_threats(); return 0; }

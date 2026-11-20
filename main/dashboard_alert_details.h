@@ -20,6 +20,8 @@ typedef struct {
     dashboard_alert_record_t records[DASH_ALERT_RECORDS];
     unsigned count;
     unsigned omitted;
+    /* ISO numeric suffix -> unique threat types for that territory, never target positions. */
+    uint16_t region_threats[78];
 } dashboard_alert_details_t;
 typedef struct {
     char modified[80];
