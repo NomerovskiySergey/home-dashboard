@@ -30,6 +30,7 @@ static esp_timer_handle_t retry_timer;
 static nvs_handle_t settings;
 static char setup_name[20];
 static char setup_code[17];
+static esp_netif_t *station_netif;
 
 /* Only the default ESP event loop accesses this after startup. */
 static bool setup_active;
@@ -44,6 +45,37 @@ static void set_state(dashboard_wifi_state_t next)
 dashboard_wifi_state_t dashboard_wifi_state(void)
 {
     return atomic_load(&state);
+}
+
+void dashboard_wifi_connection(dashboard_wifi_connection_t *connection)
+{
+    memset(connection, 0, sizeof(*connection));
+    if (dashboard_wifi_state() != DASH_WIFI_CONNECTED) {
+        return;
+    }
+
+    wifi_ap_record_t access_point = {0};
+    if (esp_wifi_sta_get_ap_info(&access_point) != ESP_OK) {
+        return;
+    }
+    memcpy(connection->ssid, access_point.ssid, sizeof(connection->ssid) - 1);
+    /* SSIDs may contain control bytes; keep them from changing the row layout. */
+    for (size_t i = 0; i < sizeof(connection->ssid) - 1 && connection->ssid[i]; ++i) {
+        const unsigned char byte = (unsigned char)connection->ssid[i];
+        if (byte < 0x20 || byte == 0x7f) connection->ssid[i] = ' ';
+    }
+    connection->rssi_dbm = access_point.rssi;
+    connection->associated = true;
+
+    esp_netif_ip_info_t ip = {0};
+    if (station_netif && esp_netif_is_netif_up(station_netif) &&
+        esp_netif_get_ip_info(station_netif, &ip) == ESP_OK && ip.ip.addr) {
+        snprintf(connection->ipv4, sizeof(connection->ipv4), IPSTR, IP2STR(&ip.ip));
+    }
+    /* A disconnect during the SDK reads must not leave old data on screen. */
+    if (dashboard_wifi_state() != DASH_WIFI_CONNECTED) {
+        memset(connection, 0, sizeof(*connection));
+    }
 }
 
 const char *dashboard_wifi_setup_name(void)
@@ -203,7 +235,8 @@ esp_err_t dashboard_wifi_start(void)
     ESP_ERROR_CHECK(nvs_open("dashboard_wifi", NVS_READWRITE, &settings));
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    if (!esp_netif_create_default_wifi_sta()) {
+    station_netif = esp_netif_create_default_wifi_sta();
+    if (!station_netif) {
         return ESP_ERR_NO_MEM;
     }
     setup_ap = esp_netif_create_default_wifi_ap();

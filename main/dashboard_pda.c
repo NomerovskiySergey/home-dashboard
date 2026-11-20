@@ -14,32 +14,9 @@ static const icon_line_t crosshair[] = {
     {7, 0, 7, 5}, {7, 9, 7, 14}, {0, 7, 5, 7}, {9, 7, 14, 7},
 };
 
-static const icon_line_t sliders[] = {
-    {1, 3, 13, 3}, {1, 7, 13, 7}, {1, 11, 13, 11},
-    {4, 1, 4, 5}, {9, 5, 9, 9}, {6, 9, 6, 13},
-};
-
-static const icon_line_t signal[] = {
-    {0, 5, 4, 2}, {4, 2, 10, 2}, {10, 2, 14, 5},
-    {3, 8, 6, 6}, {6, 6, 8, 6}, {8, 6, 11, 8},
-    {5, 11, 7, 10}, {7, 10, 9, 11}, {7, 13, 8, 13},
-};
-
-static const icon_line_t thermometer[] = {
-    {5, 1, 9, 1}, {5, 1, 5, 9}, {9, 1, 9, 9},
-    {5, 9, 3, 11}, {3, 11, 5, 14}, {5, 14, 9, 14},
-    {9, 14, 11, 11}, {11, 11, 9, 9}, {7, 5, 7, 12},
-};
-
 static const icon_line_t warning[] = {
     {7, 1, 14, 13}, {14, 13, 0, 13}, {0, 13, 7, 1},
     {7, 5, 7, 8}, {7, 10, 8, 10},
-};
-
-static const icon_line_t radar[] = {
-    {10, 1, 4, 1}, {4, 1, 1, 4}, {1, 4, 1, 10}, {1, 10, 4, 13},
-    {4, 13, 10, 13}, {10, 13, 13, 10}, {13, 10, 13, 5},
-    {7, 7, 13, 1}, {7, 7, 8, 7},
 };
 
 static const icon_line_t bolt[] = {
@@ -72,7 +49,7 @@ static void icon(lv_layer_t *layer, int x, int y, lv_color_t color,
 
 void dashboard_pda_draw(lv_layer_t *layer, const lv_area_t *map,
                         lv_color_t frame, lv_color_t ink, lv_color_t marker,
-                        lv_color_t wifi, lv_color_t alert)
+                        lv_color_t alert)
 {
     lv_draw_rect_dsc_t rim;
     lv_draw_rect_dsc_init(&rim);
@@ -111,11 +88,7 @@ void dashboard_pda_draw(lv_layer_t *layer, const lv_area_t *map,
     line(layer, &stroke, dnipro_x - 1, dnipro_y, dnipro_x + 1, dnipro_y);
 
     DRAW_ICON(layer, 24, 26, ink, crosshair);
-    DRAW_ICON(layer, 246, 26, ink, sliders);
-    DRAW_ICON(layer, 338, 26, wifi, signal);
-    DRAW_ICON(layer, 27, 86, ink, thermometer);
-    DRAW_ICON(layer, 175, 86, alert, warning);
-    DRAW_ICON(layer, 28, 165, ink, radar);
+    DRAW_ICON(layer, 28, 89, alert, warning);
     DRAW_ICON(layer, 28, 405, ink, bolt);
     line(layer, &stroke, 442, 408, 446, 412);
     line(layer, &stroke, 446, 412, 442, 416);

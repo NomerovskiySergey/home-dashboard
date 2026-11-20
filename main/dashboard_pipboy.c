@@ -12,7 +12,7 @@ static void line(lv_layer_t *layer, lv_draw_line_dsc_t *style,
 
 void dashboard_pipboy_draw(lv_layer_t *layer, const lv_area_t *map,
                            lv_color_t frame, lv_color_t ink, lv_color_t marker,
-                           lv_color_t wifi, lv_color_t alert)
+                           lv_color_t alert)
 {
     lv_draw_rect_dsc_t outline;
     lv_draw_rect_dsc_init(&outline);
@@ -35,43 +35,23 @@ void dashboard_pipboy_draw(lv_layer_t *layer, const lv_area_t *map,
     line(layer, &stroke, 18, 56, 462, 56);
     line(layer, &stroke, 18, 469, 462, 469);
 
-    // Location reticle and the three header instrument bars.
+    // Location reticle; settings is now a shared gear button.
     stroke.color = ink;
     line(layer, &stroke, 25, 33, 39, 33);
     line(layer, &stroke, 32, 26, 32, 40);
     outline.radius = 0;
     outline.border_color = ink;
     lv_draw_rect(layer, &outline, &(lv_area_t){28, 29, 36, 37});
-    for (int row = 0; row < 3; ++row) {
-        line(layer, &stroke, 246, 28 + row * 5, 257, 28 + row * 5);
-    }
-    stroke.color = wifi;
-    for (int bar = 0; bar < 4; ++bar) {
-        line(layer, &stroke, 338 + bar * 3, 38, 338 + bar * 3, 35 - bar * 3);
-    }
-
-    stroke.color = ink;
-    // Thermometer.
-    line(layer, &stroke, 32, 84, 32, 96);
-    line(layer, &stroke, 36, 84, 36, 96);
-    line(layer, &stroke, 32, 84, 36, 84);
-    outline.border_color = ink;
-    lv_draw_rect(layer, &outline, &(lv_area_t){30, 95, 38, 101});
     // Local danger indicator follows the actual alert status.
     stroke.color = alert;
-    line(layer, &stroke, 182, 84, 189, 98);
-    line(layer, &stroke, 189, 98, 175, 98);
-    line(layer, &stroke, 175, 98, 182, 84);
-    line(layer, &stroke, 182, 89, 182, 93);
-    line(layer, &stroke, 182, 95, 182, 96);
+    line(layer, &stroke, 35, 89, 42, 103);
+    line(layer, &stroke, 42, 103, 28, 103);
+    line(layer, &stroke, 28, 103, 35, 89);
+    line(layer, &stroke, 35, 94, 35, 98);
+    line(layer, &stroke, 35, 100, 35, 101);
 
-    // Map instrument symbol and outline.
+    // Full-sized map outline.
     stroke.color = ink;
-    line(layer, &stroke, 28, 166, 40, 166);
-    line(layer, &stroke, 28, 166, 28, 177);
-    line(layer, &stroke, 28, 177, 40, 177);
-    line(layer, &stroke, 40, 177, 40, 166);
-    line(layer, &stroke, 34, 164, 34, 179);
     outline.border_color = frame;
     lv_draw_rect(layer, &outline, map);
 
