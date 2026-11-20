@@ -10,6 +10,7 @@
 #include "dashboard_data.h"
 #include "dashboard_display_mode.h"
 #include "dashboard_pda.h"
+#include "dashboard_pipboy.h"
 #include "dashboard_theme.h"
 #include "dashboard_wifi.h"
 #include "esp_heap_caps.h"
@@ -408,58 +409,58 @@ static void add_display_switch(int y, const char *name, const char *description,
 
 static void apply_home_layout(void)
 {
-    const bool pda = theme->home_layout == DASH_HOME_PDA;
-    lv_obj_set_hidden(home.header, !pda);
-    lv_obj_set_hidden(home.map_marker, pda);
+    const bool compact = theme->home_layout != DASH_HOME_STANDARD;
+    lv_obj_set_hidden(home.header, !compact);
+    lv_obj_set_hidden(home.map_marker, compact);
 
-    lv_label_set_text(home.city, pda ? "ДНІПРО" : "Дніпро");
-    lv_obj_set_style_text_font(home.city, pda ? pda_value_font : title_font, 0);
-    lv_obj_set_pos(home.city, pda ? 44 : 16, pda ? 23 : 8);
-    lv_obj_set_style_text_font(home_clock, pda ? pda_clock_font : title_font, 0);
-    lv_obj_align(home_clock, LV_ALIGN_TOP_MID, -60, pda ? 12 : 10);
+    lv_label_set_text(home.city, compact ? "ДНІПРО" : "Дніпро");
+    lv_obj_set_style_text_font(home.city, compact ? pda_value_font : title_font, 0);
+    lv_obj_set_pos(home.city, compact ? 44 : 16, compact ? 23 : 8);
+    lv_obj_set_style_text_font(home_clock, compact ? pda_clock_font : title_font, 0);
+    lv_obj_align(home_clock, LV_ALIGN_TOP_MID, -60, compact ? 12 : 10);
 
-    lv_obj_set_y(home.settings_key, pda ? 15 : 10);
-    lv_obj_set_y(home.wifi_key, pda ? 15 : 10);
+    lv_obj_set_y(home.settings_key, compact ? 15 : 10);
+    lv_obj_set_y(home.wifi_key, compact ? 15 : 10);
     lv_obj_t *settings_caption = lv_obj_get_child(home.settings_key, 0);
-    lv_obj_set_style_text_font(settings_caption, pda ? pda_label_font : body_font, 0);
-    lv_obj_align(settings_caption, LV_ALIGN_CENTER, pda ? 7 : 0, 0);
-    lv_obj_align(home_wifi_status, LV_ALIGN_CENTER, pda ? 7 : 0, 0);
+    lv_obj_set_style_text_font(settings_caption, compact ? pda_label_font : body_font, 0);
+    lv_obj_align(settings_caption, LV_ALIGN_CENTER, compact ? 7 : 0, 0);
+    lv_obj_align(home_wifi_status, LV_ALIGN_CENTER, compact ? 7 : 0, 0);
 
-    lv_obj_set_y(home.weather_card, pda ? 61 : 64);
-    lv_obj_set_y(home.alert_card, pda ? 61 : 64);
+    lv_obj_set_y(home.weather_card, compact ? 61 : 64);
+    lv_obj_set_y(home.alert_card, compact ? 61 : 64);
     lv_obj_set_height(home.weather_card, 88);
     lv_obj_set_height(home.alert_card, 88);
-    lv_obj_set_width(home.weather_card, pda ? 148 : 140);
-    lv_obj_set_style_text_font(home.weather_heading, pda ? pda_label_font : small_font, 0);
-    lv_obj_set_style_text_font(home.alert_heading, pda ? pda_label_font : small_font, 0);
-    lv_obj_set_style_text_font(weather_value, pda ? pda_value_font : title_font, 0);
-    lv_obj_set_pos(home.weather_heading, pda ? 31 : 12, 3);
-    lv_obj_set_pos(home.alert_heading, pda ? 31 : 12, 4);
-    lv_obj_set_pos(weather_value, pda ? 31 : 12, pda ? 20 : 18);
-    lv_obj_set_pos(weather_note, pda ? 31 : 12, pda ? 41 : 49);
-    lv_obj_set_pos(alert_value, pda ? 31 : 12, pda ? 21 : 23);
-    lv_obj_set_pos(alert_note, pda ? 31 : 12, 49);
-    lv_obj_set_pos(alert_threat, pda ? 31 : 12, 67);
-    lv_obj_set_width(alert_value, pda ? 257 : 276);
-    lv_obj_set_width(alert_note, pda ? 257 : 276);
-    lv_obj_set_width(alert_threat, pda ? 257 : 276);
+    lv_obj_set_width(home.weather_card, compact ? 148 : 140);
+    lv_obj_set_style_text_font(home.weather_heading, compact ? pda_label_font : small_font, 0);
+    lv_obj_set_style_text_font(home.alert_heading, compact ? pda_label_font : small_font, 0);
+    lv_obj_set_style_text_font(weather_value, compact ? pda_value_font : title_font, 0);
+    lv_obj_set_pos(home.weather_heading, compact ? 31 : 12, 3);
+    lv_obj_set_pos(home.alert_heading, compact ? 31 : 12, 4);
+    lv_obj_set_pos(weather_value, compact ? 31 : 12, compact ? 20 : 18);
+    lv_obj_set_pos(weather_note, compact ? 31 : 12, compact ? 41 : 49);
+    lv_obj_set_pos(alert_value, compact ? 31 : 12, compact ? 21 : 23);
+    lv_obj_set_pos(alert_note, compact ? 31 : 12, 49);
+    lv_obj_set_pos(alert_threat, compact ? 31 : 12, 67);
+    lv_obj_set_width(alert_value, compact ? 257 : 276);
+    lv_obj_set_width(alert_note, compact ? 257 : 276);
+    lv_obj_set_width(alert_threat, compact ? 257 : 276);
 
-    lv_obj_set_y(home.map_card, pda ? 155 : 160);
+    lv_obj_set_y(home.map_card, compact ? 155 : 160);
     lv_obj_set_height(home.map_card, 234);
-    lv_obj_set_x(home.map_heading, pda ? 32 : 12);
-    lv_obj_set_style_text_font(home.map_heading, pda ? pda_label_font : body_font, 0);
+    lv_obj_set_x(home.map_heading, compact ? 32 : 12);
+    lv_obj_set_style_text_font(home.map_heading, compact ? pda_label_font : body_font, 0);
 
-    lv_obj_set_y(home.power_card, pda ? 393 : 400);
-    lv_obj_set_height(home.power_card, pda ? 73 : 68);
-    lv_obj_set_x(home.power_heading, pda ? 32 : 12);
-    lv_obj_set_style_text_font(home.power_heading, pda ? pda_label_font : body_font, 0);
-    lv_obj_align(energy_home_note, pda ? LV_ALIGN_TOP_RIGHT : LV_ALIGN_TOP_LEFT,
-                 pda ? -31 : 230, 6);
+    lv_obj_set_y(home.power_card, compact ? 393 : 400);
+    lv_obj_set_height(home.power_card, compact ? 73 : 68);
+    lv_obj_set_x(home.power_heading, compact ? 32 : 12);
+    lv_obj_set_style_text_font(home.power_heading, compact ? pda_label_font : body_font, 0);
+    lv_obj_align(energy_home_note, compact ? LV_ALIGN_TOP_RIGHT : LV_ALIGN_TOP_LEFT,
+                 compact ? -31 : 230, 6);
 }
 
-static void draw_pda(lv_event_t *event)
+static void draw_home_instruments(lv_event_t *event)
 {
-    if (theme->home_layout != DASH_HOME_PDA) {
+    if (theme->home_layout == DASH_HOME_STANDARD) {
         return;
     }
 
@@ -467,12 +468,15 @@ static void draw_pda(lv_event_t *event)
     lv_obj_get_coords(map_canvas, &map);
     map.x2 = map.x1 + UA_MAP_WIDTH * 210 / 256 - 1;
     map.y2 = map.y1 + UA_MAP_HEIGHT * 210 / 256 - 1;
-    dashboard_pda_draw(lv_event_get_layer(event), &map,
-                       lv_color_hex(palette->colors[DASH_COLOR_PANEL_BORDER]),
-                       lv_color_hex(palette->colors[DASH_COLOR_MUTED]),
-                       lv_color_hex(palette->colors[DASH_COLOR_MAP_MARKER]),
-                       lv_obj_get_style_text_color(home_wifi_status, LV_PART_MAIN),
-                       lv_obj_get_style_text_color(alert_value, LV_PART_MAIN));
+    void (*draw)(lv_layer_t *, const lv_area_t *, lv_color_t, lv_color_t,
+                 lv_color_t, lv_color_t, lv_color_t) =
+        theme->home_layout == DASH_HOME_PIPBOY ? dashboard_pipboy_draw : dashboard_pda_draw;
+    draw(lv_event_get_layer(event), &map,
+         lv_color_hex(palette->colors[DASH_COLOR_PANEL_BORDER]),
+         lv_color_hex(palette->colors[DASH_COLOR_MUTED]),
+         lv_color_hex(palette->colors[DASH_COLOR_MAP_MARKER]),
+         lv_obj_get_style_text_color(home_wifi_status, LV_PART_MAIN),
+         lv_obj_get_style_text_color(alert_value, LV_PART_MAIN));
 }
 
 static void change_theme(lv_event_t *event)
@@ -810,7 +814,7 @@ static void update_home_wifi(dashboard_wifi_state_t state)
     }
     lv_label_set_text_fmt(home_wifi_status, "Wi-Fi\n%s", caption);
     lv_obj_set_style_text_color(home_wifi_status, lv_color_hex(palette->colors[color]), 0);
-    if (theme->home_layout == DASH_HOME_PDA) {
+    if (theme->home_layout != DASH_HOME_STANDARD) {
         lv_obj_invalidate(home.wifi_key);
     }
 }
@@ -944,7 +948,7 @@ static void update_alert_card(const dashboard_data_snapshot_t *data)
     const lv_color_t status_color = lv_color_hex(palette->colors[color]);
     if (!lv_color_eq(lv_obj_get_style_text_color(alert_value, LV_PART_MAIN), status_color)) {
         lv_obj_set_style_text_color(alert_value, status_color, 0);
-        if (theme->home_layout == DASH_HOME_PDA) {
+        if (theme->home_layout != DASH_HOME_STANDARD) {
             lv_obj_invalidate(home.alert_card);
         }
     }
@@ -1279,7 +1283,7 @@ esp_err_t dashboard_screen_create(lv_indev_t *touch, esp_err_t (*set_backlight)(
     add_display_settings_screen();
     add_theme_screen();
     apply_home_layout();
-    lv_obj_add_event_cb(home_screen, draw_pda, LV_EVENT_DRAW_POST, NULL);
+    lv_obj_add_event_cb(home_screen, draw_home_instruments, LV_EVENT_DRAW_POST, NULL);
     read_touch = lv_indev_get_read_cb(touch);
     lv_indev_set_read_cb(touch, read_display_touch);
     lv_screen_load(home_screen);

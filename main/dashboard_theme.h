@@ -6,6 +6,7 @@
 enum {
     DASH_THEME_STANDARD = 0,
     DASH_THEME_STALKER = 1,
+    DASH_THEME_FALLOUT = 2,
 };
 
 typedef enum {
@@ -40,6 +41,7 @@ typedef struct {
 typedef enum {
     DASH_HOME_STANDARD,
     DASH_HOME_PDA,
+    DASH_HOME_PIPBOY,
 } dashboard_home_layout_t;
 
 typedef struct {
