@@ -6,6 +6,16 @@
 
 ## Перша збірка
 
+### У VS Code
+
+Відкрийте корінь репозиторію через **File → Open Folder** та встановіть рекомендоване розширення **ESP-IDF** від Espressif. У палітрі команд (`Ctrl+Shift+P`) виконайте **ESP-IDF: Select Current ESP-IDF Version** і виберіть **v6.1**. Потім виконайте **ESP-IDF: Select Port to Use** та виберіть порт плати, а в **ESP-IDF: Select Flash Method** — **UART**.
+
+Вибір SDK і порту зберігається локально у `.vscode/settings.json`; цей файл не потрапляє в Git. Налаштування конкретного комп’ютера не потрібно переносити на інші машини. Для підказок C/C++ можна встановити `C_Cpp.default.compileCommands` у `${workspaceFolder}/build/compile_commands.json`, а `cmake.configureOnOpen` — у `false`, щоб збіркою керувало розширення ESP-IDF.
+
+Для оновлення плати запустіть **ESP-IDF: Build, Flash and Start a Monitor on Your Device**. Окремо перевірити збірку можна командою **ESP-IDF: Build Your Project**. Термінал із командами нижче відкривається через **ESP-IDF: Open ESP-IDF Terminal**. Якщо редактор був відкритий під час зміни налаштувань, виконайте **Developer: Reload Window**.
+
+### Через термінал
+
 Відкрийте PowerShell ESP-IDF 6.1 у корені репозиторію. Команди першого запуску завантажують компоненти за версіями з `dependencies.lock` та генерують конфігурацію плати.
 
 ```powershell

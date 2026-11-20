@@ -7,6 +7,9 @@
 /sdkconfig.old
 /eim_config.toml
 
+# Machine-specific VS Code SDK selection and serial port
+/.vscode/settings.json
+
 # Local Agentic Harness workspace
 /.agent-harness/
 
