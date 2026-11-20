@@ -1,44 +1,35 @@
 #include "dashboard_map_view.h"
 
-static int clamp(int value, int minimum, int maximum)
-{ return value < minimum ? minimum : value > maximum ? maximum : value; }
-
-static void constrain(dashboard_map_view_t *v)
+void dashboard_map_project(int x, int y, int *sx, int *sy)
 {
-    const int width = (DASH_MAP_WIDTH + v->zoom - 1) / v->zoom;
-    const int height = (DASH_MAP_VIEW_HEIGHT + v->zoom - 1) / v->zoom;
-    v->x = clamp(v->x, 0, DASH_MAP_WIDTH - width);
-    v->y = height > DASH_MAP_HEIGHT ? (DASH_MAP_HEIGHT - height) / 2
-                                  : clamp(v->y, 0, DASH_MAP_HEIGHT - height);
+    *sx = ((2 * (x - DASH_MAP_LEFT) + 1) * DASH_MAP_VIEW_WIDTH) / (2 * DASH_MAP_CONTENT_WIDTH);
+    *sy = DASH_MAP_FIT_TOP + ((2 * (y - DASH_MAP_TOP) + 1) * DASH_MAP_VIEW_WIDTH) / (2 * DASH_MAP_CONTENT_WIDTH);
 }
 
-void dashboard_map_reset(dashboard_map_view_t *v)
+bool dashboard_map_source(int sx, int sy, int *x, int *y)
 {
-    *v = (dashboard_map_view_t){ .zoom = 1 };
-    constrain(v);
+    if (sx < 0 || sx >= DASH_MAP_VIEW_WIDTH || sy < DASH_MAP_FIT_TOP ||
+        sy >= DASH_MAP_FIT_TOP + DASH_MAP_FIT_HEIGHT) return false;
+    *x = DASH_MAP_LEFT + ((2 * sx + 1) * DASH_MAP_CONTENT_WIDTH) / (2 * DASH_MAP_VIEW_WIDTH);
+    *y = DASH_MAP_TOP + ((2 * (sy - DASH_MAP_FIT_TOP) + 1) * DASH_MAP_CONTENT_WIDTH) / (2 * DASH_MAP_VIEW_WIDTH);
+    return true;
 }
 
-void dashboard_map_zoom(dashboard_map_view_t *v, int zoom)
+unsigned dashboard_map_categories(uint16_t types, dashboard_map_icon_t icons[DASH_MAP_ICON_COUNT])
 {
-    zoom = clamp(zoom, 1, 3);
-    v->x += DASH_MAP_WIDTH / (2 * v->zoom) - DASH_MAP_WIDTH / (2 * zoom);
-    v->y += DASH_MAP_VIEW_HEIGHT / (2 * v->zoom) - DASH_MAP_VIEW_HEIGHT / (2 * zoom);
-    v->zoom = zoom;
-    constrain(v);
+    unsigned n = 0;
+    if (types & ((1u<<4)|(1u<<5)|(1u<<6))) icons[n++] = DASH_MAP_ICON_ROCKET;
+    if (types & (1u<<7)) icons[n++] = DASH_MAP_ICON_UAV;
+    if (types & ((1u<<1)|(1u<<2)|(1u<<3))) icons[n++] = DASH_MAP_ICON_AIRCRAFT;
+    if (types & (1u<<8)) icons[n++] = DASH_MAP_ICON_BOMB;
+    if (types & (1u<<9)) icons[n++] = DASH_MAP_ICON_SHIELD;
+    if (types & 1u) icons[n++] = DASH_MAP_ICON_UNKNOWN;
+    return n;
 }
 
-void dashboard_map_pan(dashboard_map_view_t *v, int dx, int dy)
+void dashboard_map_group_size(unsigned count, int *width, int *height)
 {
-    v->x -= dx / v->zoom;
-    v->y -= dy / v->zoom;
-    constrain(v);
+    if (count > DASH_MAP_ICON_COUNT) count = DASH_MAP_ICON_COUNT;
+    *width = count ? (int)(count < 3 ? count : 3) * DASH_MAP_ICON_SIZE + 6 : 0;
+    *height = count ? (int)((count + 2) / 3) * DASH_MAP_ICON_SIZE + 6 : 0;
 }
-
-void dashboard_map_project(const dashboard_map_view_t *v, int x, int y, int *sx, int *sy)
-{ *sx = (x - v->x) * v->zoom; *sy = (y - v->y) * v->zoom; }
-
-void dashboard_map_unproject(const dashboard_map_view_t *v, int sx, int sy, int *x, int *y)
-{ *x = v->x + sx / v->zoom; *y = v->y + sy / v->zoom; }
-
-bool dashboard_map_visible(int x, int y)
-{ return x >= 0 && x < DASH_MAP_WIDTH && y >= 0 && y < DASH_MAP_VIEW_HEIGHT; }

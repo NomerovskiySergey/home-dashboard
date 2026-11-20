@@ -6,6 +6,7 @@
 #include <time.h>
 
 #include "assets/ukraine_map_data.h"
+#include "assets/dashboard_threat_icons.h"
 #include "dashboard_data.h"
 #include "dashboard_map_view.h"
 #include "dashboard_display_mode.h"
@@ -87,10 +88,9 @@ static lv_obj_t *alert_threat;
 static lv_obj_t *map_state_note;
 static bool map_stale;
 static dashboard_alert_details_t screen_alert_details;
-static lv_obj_t *map_screen, *zoom_viewport, *zoom_canvas, *zoom_title, *zoom_note;
-static lv_draw_buf_t zoom_buffer;
-static dashboard_map_view_t map_view;
-static bool zoom_dirty = true;
+static lv_obj_t *map_screen, *full_map_viewport, *full_map_canvas, *full_map_note;
+static lv_draw_buf_t full_map_buffer;
+static bool full_map_dirty = true;
 static lv_obj_t *map_cities[sizeof(ua_map_cities) / sizeof(ua_map_cities[0])];
 static lv_obj_t *map_city_dots[sizeof(ua_map_cities) / sizeof(ua_map_cities[0])];
 static lv_obj_t *map_threats[sizeof(ua_map_centers) / sizeof(ua_map_centers[0])];
@@ -250,7 +250,7 @@ static esp_err_t paint_map(const char regions[DASHBOARD_REGION_COUNT])
     }
     painted_stale = map_stale;
     painted_palette = palette;
-    zoom_dirty = true;
+    full_map_dirty = true;
     if (map_canvas) {
         lv_obj_invalidate(map_canvas);
     }
@@ -353,12 +353,9 @@ static void read_display_touch(lv_indev_t *input, lv_indev_data_t *data)
     const bool was_asleep = display_mode.asleep;
     if (dashboard_display_touch(&display_mode, data->state == LV_INDEV_STATE_PRESSED,
                                 esp_timer_get_time() / 1000)) {
-        // Hide the entire wake gesture, including its release, from LVGL.
         data->state = LV_INDEV_STATE_RELEASED;
     }
-    if (was_asleep && !display_mode.asleep) {
-        refresh_display_mode();
-    }
+    if (was_asleep && !display_mode.asleep) refresh_display_mode();
 }
 
 static uint8_t display_flags(void)
@@ -982,13 +979,13 @@ static void update_alert_card(const dashboard_data_snapshot_t *data)
     }
 }
 
-/* Labels are territorial threat badges, not the coordinates of individual targets. */
+/* Badges represent territorial threats, not individual target positions. */
 static bool place_map_label(lv_obj_t *object, int x, int y, lv_area_t *used, unsigned *count)
 {
     lv_obj_update_layout(object);
     const int width = lv_obj_get_width(object), height = lv_obj_get_height(object);
     const lv_area_t box = {x, y, x + width + 3, y + height + 2};
-    bool show = x >= 0 && y >= 0 && box.x2 < DASH_MAP_WIDTH && box.y2 < DASH_MAP_VIEW_HEIGHT;
+    bool show = x >= 0 && y >= 0 && box.x2 < DASH_MAP_VIEW_WIDTH && box.y2 < DASH_MAP_VIEW_HEIGHT;
     for (unsigned i = 0; show && i < *count; ++i)
         if (box.x1 <= used[i].x2 && box.x2 >= used[i].x1 &&
             box.y1 <= used[i].y2 && box.y2 >= used[i].y1) show = false;
@@ -1000,158 +997,206 @@ static bool place_map_label(lv_obj_t *object, int x, int y, lv_area_t *used, uns
     return show;
 }
 
+static bool place_map_badge(lv_obj_t *object, int x, int y, int width, int height,
+                            lv_area_t *used, unsigned *count)
+{
+    if (place_map_label(object, x-width/2, y-height/2, used, count)) return true;
+    /* Nearby offset badges retain a leader to their territory instead of disappearing. */
+    for (int radius=1; radius<=3; ++radius) for (int dy=-radius; dy<=radius; ++dy)
+        for (int dx=-radius; dx<=radius; ++dx) {
+            if (dx!=-radius && dx!=radius && dy!=-radius && dy!=radius) continue;
+            if (place_map_label(object, x-width/2+dx*32, y-height/2+dy*32, used, count)) return true;
+        }
+    for (int top=60; top<420; top+=60) for (int left=4; left<420; left+=84)
+        if (place_map_label(object, left, top, used, count)) return true;
+    return false;
+}
+
+static void draw_map_leaders(lv_event_t *event)
+{
+    lv_draw_line_dsc_t line;
+    lv_draw_line_dsc_init(&line);
+    line.width=1;
+    line.color=lv_color_hex(palette->colors[DASH_COLOR_WARNING]);
+    line.opa=LV_OPA_60;
+    for (unsigned i=0; i<sizeof(map_threats)/sizeof(map_threats[0]); ++i) {
+        if (!map_threats[i] || lv_obj_has_flag(map_threats[i],LV_OBJ_FLAG_HIDDEN)) continue;
+        int x,y;
+        dashboard_map_project(ua_map_centers[i].x,ua_map_centers[i].y,&x,&y);
+        lv_area_t box;
+        lv_obj_get_coords(map_threats[i],&box);
+        line.p1=(lv_point_precise_t){x,y};
+        line.p2=(lv_point_precise_t){(box.x1+box.x2)/2,(box.y1+box.y2)/2};
+        lv_draw_line(lv_event_get_layer(event),&line);
+    }
+}
+
+static void draw_threat_icon(lv_layer_t *layer, dashboard_map_icon_t icon, int x, int y)
+{
+    lv_draw_triangle_dsc_t fill;
+    lv_draw_triangle_dsc_init(&fill);
+    fill.color = lv_color_hex(palette->colors[DASH_COLOR_TEXT]);
+    lv_draw_line_dsc_t stroke;
+    lv_draw_line_dsc_init(&stroke);
+    stroke.color = fill.color;
+    stroke.width = 2;
+    stroke.round_start = stroke.round_end = true;
+    const dashboard_icon_asset_t *asset = &dashboard_threat_icons[icon];
+    for (unsigned n = 0; n < asset->triangle_count; ++n) {
+        const dashboard_icon_triangle_t *t = &asset->triangles[n];
+        fill.p[0] = (lv_point_precise_t){x+t->x1,y+t->y1};
+        fill.p[1] = (lv_point_precise_t){x+t->x2,y+t->y2};
+        fill.p[2] = (lv_point_precise_t){x+t->x3,y+t->y3};
+        lv_draw_triangle(layer, &fill);
+    }
+    for (unsigned n = 0; n < asset->segment_count; ++n) {
+        const dashboard_icon_segment_t *line = &asset->segments[n];
+        stroke.p1 = (lv_point_precise_t){x+line->x1,y+line->y1};
+        stroke.p2 = (lv_point_precise_t){x+line->x2,y+line->y2};
+        lv_draw_line(layer, &stroke);
+    }
+}
+
+static void draw_threat_group(lv_event_t *event)
+{
+    const unsigned region = (unsigned)(uintptr_t)lv_event_get_user_data(event);
+    dashboard_map_icon_t icons[DASH_MAP_ICON_COUNT];
+    const unsigned count = dashboard_map_categories(visible_threats[region], icons);
+    lv_area_t bounds;
+    lv_obj_get_coords(lv_event_get_target_obj(event), &bounds);
+    for (unsigned i = 0; i < count; ++i)
+        draw_threat_icon(lv_event_get_layer(event), icons[i],
+            bounds.x1 + 3 + (int)(i % 3) * DASH_MAP_ICON_SIZE,
+            bounds.y1 + 3 + (int)(i / 3) * DASH_MAP_ICON_SIZE);
+}
+
+static void draw_map_legend(lv_event_t *event)
+{
+    lv_area_t bounds;
+    lv_obj_get_coords(lv_event_get_target_obj(event), &bounds);
+    for (unsigned i = 0; i < DASH_MAP_ICON_COUNT; ++i)
+        draw_threat_icon(lv_event_get_layer(event), (dashboard_map_icon_t)i,
+            bounds.x1 + 3 + (int)(i % 3) * 112,
+            bounds.y1 + 2 + (int)(i / 3) * 28);
+}
+
 static void update_full_map(void)
 {
-    if (!zoom_canvas || !zoom_dirty) return;
+    if (!full_map_canvas || !full_map_dirty) return;
     const uint16_t background = lv_color_to_u16(lv_color_hex(palette->colors[DASH_COLOR_PANEL]));
+    int columns[DASH_MAP_VIEW_WIDTH];
+    for (int x = 0; x < DASH_MAP_VIEW_WIDTH; ++x) {
+        int ignored;
+        dashboard_map_source(x, DASH_MAP_FIT_TOP, &columns[x], &ignored);
+    }
     for (int y = 0; y < DASH_MAP_VIEW_HEIGHT; ++y) {
-        uint16_t *dest = lv_draw_buf_goto_xy(&zoom_buffer, 0, y);
+        uint16_t *dest = lv_draw_buf_goto_xy(&full_map_buffer, 0, y);
         int sx, sy;
-        dashboard_map_unproject(&map_view, 0, y, &sx, &sy);
-        if (sy < 0 || sy >= UA_MAP_HEIGHT) {
-            for (int x = 0; x < DASH_MAP_WIDTH; ++x) dest[x] = background;
+        if (!dashboard_map_source(0, y, &sx, &sy)) {
+            for (int x = 0; x < DASH_MAP_VIEW_WIDTH; ++x) dest[x] = background;
         } else {
             const uint16_t *src = lv_draw_buf_goto_xy(&map_buffer, 0, sy);
-            for (int x = 0; x < DASH_MAP_WIDTH; ++x) dest[x] = src[sx + x / map_view.zoom];
+            for (int x = 0; x < DASH_MAP_VIEW_WIDTH; ++x) dest[x] = src[columns[x]];
         }
     }
-    lv_obj_invalidate(zoom_canvas);
+    lv_obj_invalidate(full_map_canvas);
     lv_area_t occupied[sizeof(ua_map_cities) / sizeof(ua_map_cities[0]) +
-                       sizeof(ua_map_centers) / sizeof(ua_map_centers[0])];
-    unsigned count = 0;
+                       sizeof(ua_map_centers) / sizeof(ua_map_centers[0]) + 3];
+    occupied[0]=(lv_area_t){0,0,479,55};
+    occupied[1]=(lv_area_t){404,452,479,479};
+    occupied[2]=(lv_area_t){8,408,364,471};
+    unsigned count = 3;
     for (unsigned i = 0; i < sizeof(map_threats) / sizeof(map_threats[0]); ++i) {
         const ua_map_region_t *r = &ua_map_centers[i];
         const uint16_t types = visible_threats[r->region];
         if (!types) { lv_obj_set_hidden(map_threats[i], true); continue; }
-        char text[64] = "";
-        /* Unique categories, not a count of targets. */
-        if (types & (1u << 7)) strcat(text, "Б ");
-        if (types & ((1u << 4) | (1u << 5) | (1u << 6))) strcat(text, "Р ");
-        if (types & ((1u << 1) | (1u << 2) | (1u << 3))) strcat(text, "А ");
-        if (types & (1u << 8)) strcat(text, "К ");
-        if (types & (1u << 9)) strcat(text, "П ");
-        if (types & 1u) strcat(text, "? ");
-        text[strlen(text) - 1] = 0;
-        set_label_if_changed(map_threats[i], text);
+        dashboard_map_icon_t icons[DASH_MAP_ICON_COUNT];
+        const unsigned icon_count = dashboard_map_categories(types, icons);
+        if (!icon_count) { lv_obj_set_hidden(map_threats[i], true); continue; }
+        int width, height;
+        dashboard_map_group_size(icon_count, &width, &height);
+        lv_obj_set_size(map_threats[i], width, height);
         lv_obj_set_hidden(map_threats[i], false);
-        lv_obj_set_style_bg_color(map_threats[i], lv_color_hex(palette->colors[DASH_COLOR_PANEL]), 0);
-        lv_obj_set_style_text_color(map_threats[i], lv_color_hex(palette->colors[DASH_COLOR_WARNING]), 0);
+        lv_obj_set_style_border_color(map_threats[i], lv_color_hex(palette->colors[DASH_COLOR_WARNING]), 0);
         int x, y;
-        dashboard_map_project(&map_view, r->x, r->y, &x, &y);
-        lv_obj_update_layout(map_threats[i]);
-        place_map_label(map_threats[i], x - lv_obj_get_width(map_threats[i]) / 2, y - 9, occupied, &count);
+        dashboard_map_project(r->x, r->y, &x, &y);
+        place_map_badge(map_threats[i], x, y, width, height, occupied, &count);
+        lv_obj_invalidate(map_threats[i]);
     }
     for (unsigned i = 0; i < sizeof(map_cities) / sizeof(map_cities[0]); ++i) {
         int x, y;
-        dashboard_map_project(&map_view, ua_map_cities[i].x, ua_map_cities[i].y, &x, &y);
+        dashboard_map_project(ua_map_cities[i].x, ua_map_cities[i].y, &x, &y);
         lv_obj_set_hidden(map_cities[i], false);
-        const bool visible = (i == 0 || map_view.zoom > 1) && dashboard_map_visible(x, y) &&
-            place_map_label(map_cities[i], x + 6, y - 9, occupied, &count);
+        lv_obj_update_layout(map_cities[i]);
+        const int name_width=lv_obj_get_width(map_cities[i]);
+        const int name_x=x+name_width+10<DASH_MAP_VIEW_WIDTH ? x+6 : x-name_width-6;
+        const bool visible = place_map_label(map_cities[i], name_x, y-9, occupied, &count);
         lv_obj_set_hidden(map_cities[i], !visible);
         lv_obj_set_hidden(map_city_dots[i], !visible);
         if (visible) lv_obj_set_pos(map_city_dots[i], x - 2, y - 2);
     }
-    char title[24];
-    snprintf(title, sizeof(title), "%d×", map_view.zoom);
-    set_label_if_changed(zoom_title, title);
-    zoom_dirty = false;
-}
-
-static void map_drag(lv_event_t *event)
-{
-    static lv_point_t start;
-    static dashboard_map_view_t original;
-    static int64_t last_paint;
-    static bool dragging;
-    lv_indev_t *input = lv_event_get_indev(event);
-    if (!input) return;
-    const lv_event_code_t code = lv_event_get_code(event);
-    lv_point_t point;
-    lv_indev_get_point(input, &point);
-    if (code == LV_EVENT_PRESSED) {
-        start = point;
-        original = map_view;
-        dragging = true;
-    } else if (code == LV_EVENT_PRESSING && dragging) {
-        const dashboard_map_view_t previous = map_view;
-        map_view = original;
-        dashboard_map_pan(&map_view, point.x - start.x, point.y - start.y);
-        if (map_view.x != previous.x || map_view.y != previous.y) zoom_dirty = true;
-        const int64_t now = esp_timer_get_time();
-        if (now - last_paint >= 33000) { update_full_map(); last_paint = now; }
-    } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
-        dragging = false;
-        update_full_map();
-    }
-}
-
-static void change_map_zoom(lv_event_t *event)
-{
-    const int change = (int)(intptr_t)lv_event_get_user_data(event);
-    if (change) dashboard_map_zoom(&map_view, map_view.zoom + change);
-    else dashboard_map_reset(&map_view);
-    zoom_dirty = true;
-    update_full_map();
+    full_map_dirty = false;
 }
 
 static void open_map(lv_event_t *event)
 {
     (void)event;
     if (!map_canvas) return;
-    if (!zoom_canvas) {
-        const uint32_t stride = lv_draw_buf_width_to_stride(DASH_MAP_WIDTH, LV_COLOR_FORMAT_RGB565);
-        const uint32_t bytes = LV_DRAW_BUF_SIZE(DASH_MAP_WIDTH, DASH_MAP_VIEW_HEIGHT, LV_COLOR_FORMAT_RGB565);
+    if (!full_map_canvas) {
+        const uint32_t stride = lv_draw_buf_width_to_stride(DASH_MAP_VIEW_WIDTH, LV_COLOR_FORMAT_RGB565);
+        const uint32_t bytes = LV_DRAW_BUF_SIZE(DASH_MAP_VIEW_WIDTH, DASH_MAP_VIEW_HEIGHT, LV_COLOR_FORMAT_RGB565);
         void *storage = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!storage || lv_draw_buf_init(&zoom_buffer, DASH_MAP_WIDTH, DASH_MAP_VIEW_HEIGHT,
+        if (!storage || lv_draw_buf_init(&full_map_buffer, DASH_MAP_VIEW_WIDTH, DASH_MAP_VIEW_HEIGHT,
                 LV_COLOR_FORMAT_RGB565, stride, storage, bytes) != LV_RESULT_OK) {
             heap_caps_free(storage);
             set_label_if_changed(alert_threat, "Для карти бракує пам’яті");
             return;
         }
-        zoom_canvas = lv_canvas_create(zoom_viewport);
-        lv_canvas_set_draw_buf(zoom_canvas, &zoom_buffer);
-        lv_obj_set_clickable(zoom_canvas, true);
-        lv_obj_set_scrollable(zoom_canvas, false);
-        lv_obj_add_event_cb(zoom_canvas, map_drag, LV_EVENT_PRESSED, NULL);
-        lv_obj_add_event_cb(zoom_canvas, map_drag, LV_EVENT_PRESSING, NULL);
-        lv_obj_add_event_cb(zoom_canvas, map_drag, LV_EVENT_RELEASED, NULL);
-        lv_obj_add_event_cb(zoom_canvas, map_drag, LV_EVENT_PRESS_LOST, NULL);
+        full_map_canvas = lv_canvas_create(full_map_viewport);
+        lv_canvas_set_draw_buf(full_map_canvas, &full_map_buffer);
+        lv_obj_set_clickable(full_map_canvas, false);
+        lv_obj_set_scrollable(full_map_canvas, false);
+        lv_obj_add_event_cb(full_map_canvas, draw_map_leaders, LV_EVENT_DRAW_POST, NULL);
         for (unsigned i = 0; i < sizeof(map_threats) / sizeof(map_threats[0]); ++i) {
-            map_threats[i] = label(zoom_viewport, "", small_font, DASH_COLOR_WARNING, 0, 0);
-            lv_obj_set_style_bg_color(map_threats[i], lv_color_hex(palette->colors[DASH_COLOR_PANEL]), 0);
-            lv_obj_add_style(map_threats[i], &color_styles[DASH_COLOR_PANEL], 0);
-            lv_obj_set_style_text_color(map_threats[i], lv_color_hex(palette->colors[DASH_COLOR_WARNING]), 0);
-            lv_obj_set_style_bg_opa(map_threats[i], LV_OPA_COVER, 0);
-            lv_obj_set_style_pad_hor(map_threats[i], 3, 0);
-            lv_obj_set_style_radius(map_threats[i], 3, 0);
+            map_threats[i] = surface(full_map_viewport, 0, 0, 30, 30, DASH_COLOR_PANEL, 5);
+            lv_obj_set_style_radius(map_threats[i], 5, 0);
+            lv_obj_set_style_border_width(map_threats[i], 1, 0);
+            lv_obj_add_event_cb(map_threats[i], draw_threat_group, LV_EVENT_DRAW_POST,
+                                (void *)(uintptr_t)ua_map_centers[i].region);
         }
         for (unsigned i = 0; i < sizeof(map_cities) / sizeof(map_cities[0]); ++i) {
-            map_city_dots[i] = surface(zoom_viewport, 0, 0, 5, 5, DASH_COLOR_MAP_MARKER, 3);
-            map_cities[i] = label(zoom_viewport, ua_map_cities[i].name, small_font, DASH_COLOR_TEXT, 0, 0);
+            map_city_dots[i] = surface(full_map_viewport, 0, 0, 5, 5, DASH_COLOR_MAP_MARKER, 3);
+            map_cities[i] = label(full_map_viewport, ua_map_cities[i].name, small_font, DASH_COLOR_TEXT, 0, 0);
         }
     }
-    dashboard_map_reset(&map_view);
-    zoom_dirty = true;
+    full_map_dirty = true;
     lv_screen_load(map_screen);
     update_remote_data(NULL);
 }
 
 static void add_map_screen(void)
 {
-    button(map_screen, "‹ Назад", 16, 10, 108, show_screen, home_screen);
-    zoom_title = label(map_screen, "1×", body_font, DASH_COLOR_TEXT, 144, 18);
-    button(map_screen, "−", 204, 10, 44, change_map_zoom, (void *)(intptr_t)-1);
-    button(map_screen, "+", 256, 10, 44, change_map_zoom, (void *)(intptr_t)1);
-    button(map_screen, "Скинути", 308, 10, 156, change_map_zoom, NULL);
-    zoom_note = label(map_screen, "", small_font, DASH_COLOR_MUTED, 28, 52);
-    lv_obj_set_width(zoom_note, DASH_MAP_WIDTH);
-    lv_label_set_long_mode(zoom_note, LV_LABEL_LONG_DOT);
-    zoom_viewport = surface(map_screen, 28, 76, DASH_MAP_WIDTH, DASH_MAP_VIEW_HEIGHT, DASH_COLOR_PANEL, 0);
-    lv_obj_set_style_border_width(zoom_viewport, 0, 0);
-    lv_obj_set_style_radius(zoom_viewport, 0, 0);
-    label(map_screen, "Б — БпЛА · Р — ракети · А — авіація", small_font, DASH_COLOR_TEXT, 28, 402);
-    label(map_screen, "К — КАБ · П — ППО · ? — інше", small_font, DASH_COLOR_TEXT, 28, 426);
-    label(map_screen, "Перетягуйте карту · © OSM", small_font, DASH_COLOR_MUTED, 28, 452);
+    /* Overlay controls stay above the later canvas because the viewport is the first sibling. */
+    full_map_viewport = surface(map_screen, 0, 0, DASH_MAP_VIEW_WIDTH, DASH_MAP_VIEW_HEIGHT, DASH_COLOR_PANEL, 0);
+    lv_obj_set_style_border_width(full_map_viewport, 0, 0);
+    lv_obj_set_style_radius(full_map_viewport, 0, 0);
+    button(map_screen, "‹ Назад", 12, 10, 104, show_screen, home_screen);
+    full_map_note = label(map_screen, "", small_font, DASH_COLOR_MUTED, 140, 18);
+    lv_obj_set_width(full_map_note, 328);
+    lv_label_set_long_mode(full_map_note, LV_LABEL_LONG_DOT);
+    lv_obj_t *legend = surface(map_screen, 12, 412, 348, 56, DASH_COLOR_PANEL, 6);
+    lv_obj_set_style_border_width(legend, 0, 0);
+    lv_obj_set_style_radius(legend, 6, 0);
+    static const char *const names[DASH_MAP_ICON_COUNT] = {
+        [DASH_MAP_ICON_ROCKET]="Ракети", [DASH_MAP_ICON_UAV]="БпЛА",
+        [DASH_MAP_ICON_AIRCRAFT]="Авіація", [DASH_MAP_ICON_BOMB]="КАБ",
+        [DASH_MAP_ICON_SHIELD]="ППО", [DASH_MAP_ICON_UNKNOWN]="Інше",
+    };
+    for (unsigned i = 0; i < DASH_MAP_ICON_COUNT; ++i)
+        label(legend, names[i], small_font, DASH_COLOR_MUTED,
+            30 + (int)(i % 3) * 112, 4 + (int)(i / 3) * 28);
+    lv_obj_add_event_cb(legend, draw_map_legend, LV_EVENT_DRAW_POST, NULL);
+    label(map_screen, "© OSM", small_font, DASH_COLOR_MUTED, 416, 460);
 }
 
 static void update_remote_data(lv_timer_t *timer)
@@ -1179,9 +1224,9 @@ static void update_remote_data(lv_timer_t *timer)
             if (data.region_alerts[i] != 'R' && data.region_alerts[i] != 'Y' && data.region_alerts[i] != 'P') threats[i] = 0;
         if (memcmp(threats, visible_threats, sizeof(threats))) {
             memcpy(visible_threats, threats, sizeof(threats));
-            zoom_dirty = true;
+            full_map_dirty = true;
         }
-        set_label_if_changed(zoom_note, data.alerts_state == DASH_DATA_NO_TOKEN ? "Потрібен токен Alerts.in.ua" :
+        set_label_if_changed(full_map_note, data.alerts_state == DASH_DATA_NO_TOKEN ? "Потрібен токен Alerts.in.ua" :
             data.alerts_state == DASH_DATA_AUTH_ERROR ? "Токен Alerts.in.ua не прийнято" :
             map_stale ? (data.alerts_updated_us ? "Карта застаріла · перевірте зв’язок" : "Очікування актуальної карти") :
             data.alert_details_state == DASH_DATA_FRESH ? "Значки — загрози для територій" : "Карта актуальна · типи загроз недоступні");

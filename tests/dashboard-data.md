@@ -9,7 +9,7 @@ cl /nologo /std:c11 /utf-8 /W4 /I main tests/dashboard_map_view_test.c main/dash
 .\build\dashboard_map_view_test.exe
 ```
 
-Перевіряються zoom 1×/2×/3×, центр, обмеження панорамування, reset і перетворення координат для всіх пікселів viewport на кожному масштабі й крайніх позиціях.
+Перевіряються fixed fit480×327, фактичні непорожні bounds RLE без втрати географії, source/project roundtrip кожного пікселя, мітка Дніпра та безпечне читання canvas480×480. Category mask→шість різних піктограм без дублікатів, габарити груп і bounds векторних assets24×24.
 
 | Сценарій | Очікуваний результат |
 | --- | --- |

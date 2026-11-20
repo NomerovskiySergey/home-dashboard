@@ -16,7 +16,6 @@
 static const char *const tag = "dashboard";
 static periph_ledc_handle_t *backlight;
 static uint32_t max_backlight_duty;
-
 static esp_err_t set_backlight(int percent)
 {
     const uint32_t duty = max_backlight_duty * percent / 100;
@@ -77,7 +76,6 @@ static lv_indev_t *start_display(void)
     };
     lv_indev_t *input = lvgl_port_add_touch(&touch_config);
     ESP_ERROR_CHECK(input ? ESP_OK : ESP_FAIL);
-
     ESP_ERROR_CHECK(esp_board_manager_init_device_by_name("lcd_brightness"));
     ESP_ERROR_CHECK(esp_board_manager_get_device_handle("lcd_brightness", (void **)&backlight));
     dev_ledc_ctrl_config_t *brightness = NULL;
