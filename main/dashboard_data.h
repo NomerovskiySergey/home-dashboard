@@ -6,6 +6,7 @@
 
 #include "dashboard_data_parse.h"
 #include "dashboard_alert_details.h"
+#include "dashboard_recovery.h"
 
 typedef enum {
     DASH_DATA_WAITING,
@@ -31,6 +32,9 @@ typedef struct {
 } dashboard_data_snapshot_t;
 
 esp_err_t dashboard_data_start(void);
+/* Nonblocking request; the existing worker owns cancellation and cleanup. */
+bool dashboard_data_restart(void);
+void dashboard_data_recovery(dashboard_recovery_t *out);
 void dashboard_data_snapshot(dashboard_data_snapshot_t *out);
 /* Separate copy avoids putting the bounded detail records on the LVGL task stack. */
 bool dashboard_data_alert_details(dashboard_alert_details_t *out, const dashboard_data_snapshot_t *expected);
