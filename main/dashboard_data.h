@@ -32,7 +32,7 @@ typedef struct {
 } dashboard_data_snapshot_t;
 
 esp_err_t dashboard_data_start(void);
-/* Nonblocking request; the existing worker owns cancellation and cleanup. */
+/* Nonblocking request to all three service workers; each owns its cleanup. */
 bool dashboard_data_restart(void);
 void dashboard_data_recovery(dashboard_recovery_t *out);
 void dashboard_data_snapshot(dashboard_data_snapshot_t *out);

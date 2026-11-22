@@ -65,11 +65,43 @@ static void cleanup_deadline(void)
     assert(!r.pending && r.requests == 1);
 }
 
+static void service_isolation(void)
+{
+    dashboard_recovery_t workers[3], group;
+    dashboard_recovery_init(&group, 100);
+    for (int i = 0; i < 3; ++i) dashboard_recovery_init(&workers[i], 100);
+    const int64_t now = 100 + DASH_RECOVERY_STALL_US;
+    dashboard_recovery_heartbeat(&workers[0], now);
+    dashboard_recovery_heartbeat(&workers[2], now);
+    dashboard_recovery_group_poll(workers, 3, &group, now);
+    assert(!workers[0].pending && workers[1].pending && !workers[2].pending);
+    assert(group.pending && group.automatic);
+    dashboard_recovery_group_poll(workers, 3, &group, now + DASH_RECOVERY_GRACE_US);
+    assert(group.state == DASH_RECOVERY_FAILED);
+    dashboard_recovery_begin(&workers[1], now + DASH_RECOVERY_GRACE_US + 1);
+    dashboard_recovery_finish(&workers[1], now + DASH_RECOVERY_GRACE_US + 2);
+    dashboard_recovery_group_update(workers, 3, &group, now + DASH_RECOVERY_GRACE_US + 2);
+    assert(!group.pending && group.restarts == 1);
+    assert(!dashboard_recovery_group_request(workers, 3, &group, group.restarted_us));
+    const int64_t manual = group.restarted_us + DASH_RECOVERY_COOLDOWN_US;
+    assert(dashboard_recovery_group_request(workers, 3, &group, manual));
+    assert(!dashboard_recovery_group_request(workers, 3, &group, manual + 1));
+    for (int i = 0; i < 3; ++i) assert(workers[i].pending);
+    dashboard_recovery_finish(&workers[0], manual + 1);
+    dashboard_recovery_finish(&workers[2], manual + 2);
+    dashboard_recovery_group_update(workers, 3, &group, manual + 2);
+    assert(group.pending && group.restarts == 1); /* last worker must acknowledge */
+    dashboard_recovery_finish(&workers[1], manual + 3);
+    dashboard_recovery_group_update(workers, 3, &group, manual + 3);
+    assert(!group.pending && group.restarts == 2);
+}
+
 int main(void)
 {
     manual_restart();
     watchdog();
     cleanup_deadline();
+    service_isolation();
     puts("dashboard recovery: PASS");
     return 0;
 }

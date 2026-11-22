@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
 #define DASH_RECOVERY_STALL_US INT64_C(45000000)
 #define DASH_RECOVERY_GRACE_US INT64_C(15000000)
@@ -32,3 +33,10 @@ void dashboard_recovery_heartbeat(dashboard_recovery_t *recovery, int64_t now);
 void dashboard_recovery_poll(dashboard_recovery_t *recovery, int64_t now);
 void dashboard_recovery_begin(dashboard_recovery_t *recovery, int64_t now);
 void dashboard_recovery_finish(dashboard_recovery_t *recovery, int64_t now);
+/* Caller holds the same lock across all workers and their UI summary. */
+bool dashboard_recovery_group_request(dashboard_recovery_t *workers, size_t count,
+                                      dashboard_recovery_t *summary, int64_t now);
+void dashboard_recovery_group_update(const dashboard_recovery_t *workers, size_t count,
+                                     dashboard_recovery_t *summary, int64_t now);
+void dashboard_recovery_group_poll(dashboard_recovery_t *workers, size_t count,
+                                   dashboard_recovery_t *summary, int64_t now);

@@ -148,7 +148,11 @@ void vTaskDelay(unsigned ms)
     clock_us += (int64_t)ms * 1000;
     if (drive_worker && ms == 1000) {
         delays++;
-        dashboard_recovery_poll(&recovery, clock_us);
+        for (int i=0; i<WORKER_COUNT; ++i) if (i!=WORKER_ALERTS) {
+            dashboard_recovery_heartbeat(&worker_recovery[i],clock_us);
+            if (worker_recovery[i].pending) dashboard_recovery_finish(&worker_recovery[i],clock_us);
+        }
+        dashboard_recovery_group_update(worker_recovery,WORKER_COUNT,&recovery,clock_us);
         assert(recovery.state != DASH_RECOVERY_FAILED);
         if (delays == stop_after) longjmp(worker_exit, 1);
         /* Repeated manual requests throughout 120 seconds offline. */
@@ -165,8 +169,8 @@ dashboard_wifi_state_t dashboard_wifi_state(void) { return DASH_WIFI_OFFLINE; }
 
 int main(void)
 {
-    assert(dashboard_data_start() == ESP_OK && creates == 2);
-    assert(dashboard_data_start() == ESP_ERR_INVALID_STATE && creates == 2);
+    assert(dashboard_data_start() == ESP_OK && creates == 4);
+    assert(dashboard_data_start() == ESP_ERR_INVALID_STATE && creates == 4);
     char storage[256];
     http_body_t body = { .text=storage, .capacity=sizeof(storage) };
     latest.weather_updated_us=123;
@@ -179,9 +183,12 @@ int main(void)
     dashboard_data_snapshot_t snapshot;
     dashboard_data_snapshot(&snapshot);
     assert(snapshot.weather_state==DASH_DATA_STALE);
-    assert(!dashboard_data_restart() && creates==2);
-    dashboard_recovery_begin(&recovery, clock_us);
-    dashboard_recovery_finish(&recovery, clock_us);
+    assert(!dashboard_data_restart() && creates==4);
+    for(int i=0;i<WORKER_COUNT;++i) {
+        dashboard_recovery_begin(&worker_recovery[i],clock_us);
+        dashboard_recovery_finish(&worker_recovery[i],clock_us);
+    }
+    dashboard_recovery_group_update(worker_recovery,WORKER_COUNT,&recovery,clock_us);
     mode=0;
     response_status=429;
     assert(fetch_json(SOURCE_ENERGY,"fake",&body)==429);
@@ -203,15 +210,18 @@ int main(void)
     mode=0;
     drive_worker=true;
     stop_after=120;
-    if (setjmp(worker_exit)==0) data_task(NULL);
+    if (setjmp(worker_exit)==0) data_task(&workers[WORKER_ALERTS]);
     drive_worker=false;
-    assert(recovery.restarts>10 && live_allocations==2);
-    assert(creates==2 && deletes==0 && clients==0);
+    assert(recovery.restarts>10 && live_allocations==1);
+    assert(creates==4 && deletes==0 && clients==0);
     assert(map_cache.valid && !strcmp(map_cache.modified,"cached"));
     assert(alerts_rate.count==1 && alerts_rate.blocked_until==blocked_until);
     assert(retry_not_before[SOURCE_ENERGY]==paused_until);
     assert(latest.weather_updated_us==123 && latest.temperature_tenths==170);
     while(live_allocations) tracked_free(allocations[0]);
+    for(int i=0;i<WORKER_COUNT;++i)
+        if(worker_recovery[i].pending) dashboard_recovery_finish(&worker_recovery[i],clock_us);
+    dashboard_recovery_group_update(worker_recovery,WORKER_COUNT,&recovery,clock_us);
     clock_us += DASH_RECOVERY_COOLDOWN_US;
     alerts_rate=(dashboard_alert_rate_t){0};
     mode=3;
@@ -221,9 +231,10 @@ int main(void)
     assert(!dashboard_alert_rate_take(&alerts_rate,clock_us/1000000));
     /* Failure to allocate a worker never leaves a supervisor or duplicates. */
     data_started=false;
+    startup_state=START_NOT_STARTED; /* simulate a fresh boot in the mock runtime */
     fail_create=creates+2;
     assert(dashboard_data_start()==ESP_ERR_NO_MEM);
-    assert(!data_started && deletes==1 && recovery.state==DASH_RECOVERY_FAILED);
+    assert(!data_started && deletes==0 && recovery.state==DASH_RECOVERY_FAILED);
     assert(!dashboard_data_restart());
     puts("real data worker recovery: PASS");
     return 0;
