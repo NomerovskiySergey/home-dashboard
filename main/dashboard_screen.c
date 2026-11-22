@@ -17,6 +17,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_system.h"
 #include "nvs.h"
 
 enum {
@@ -78,6 +79,10 @@ static lv_obj_t *wifi_connection_fields;
 static lv_obj_t *wifi_network_name;
 static lv_obj_t *wifi_ip_address;
 static lv_obj_t *wifi_signal;
+static lv_obj_t *system_screen, *reboot_screen;
+static lv_obj_t *system_sources[4], *system_status, *system_restart_button;
+static lv_obj_t *reboot_confirm_button, *reboot_status;
+static bool reboot_queued;
 static lv_draw_buf_t map_buffer;
 static lv_obj_t *map_canvas;
 static lv_obj_t *weather_value;
@@ -117,6 +122,7 @@ static void update_wifi_connection(lv_timer_t *timer);
 static void update_full_map(void);
 static void open_map(lv_event_t *event);
 static void update_remote_data(lv_timer_t *timer);
+static void update_system(lv_timer_t *timer);
 
 static void apply_theme_styles(const dashboard_palette_t *next)
 {
@@ -167,6 +173,7 @@ static void show_screen(lv_event_t *event)
     lv_obj_t *target = lv_event_get_user_data(event);
     lv_screen_load(target);
     if (target == wifi_screen) update_wifi_connection(NULL);
+    if (target == system_screen) update_system(NULL);
 }
 
 static lv_obj_t *button(lv_obj_t *parent, const char *text, int x, int y, int width,
@@ -795,6 +802,115 @@ static void add_settings_screen(void)
     lv_obj_t *wifi = button(settings_screen, "Налаштування Wi-Fi", 16, 166, CARD_WIDTH,
                              show_screen, wifi_screen);
     lv_obj_set_height(wifi, 64);
+    lv_obj_t *system = button(settings_screen, "Система", 16, 246, CARD_WIDTH,
+                              show_screen, system_screen);
+    lv_obj_set_height(system, 64);
+}
+
+static const char *source_state(dashboard_data_state_t state)
+{
+    switch (state) {
+        case DASH_DATA_FRESH: return "Актуально";
+        case DASH_DATA_STALE: return "Застаріло";
+        case DASH_DATA_NO_TOKEN: return "Потрібен ключ API";
+        case DASH_DATA_AUTH_ERROR: return "Помилка ключа API";
+        case DASH_DATA_UNAVAILABLE: return "Помилка оновлення";
+        default: return "Очікування оновлення";
+    }
+}
+
+static void update_system(lv_timer_t *timer)
+{
+    if (lv_screen_active() != system_screen) return;
+    dashboard_data_snapshot_t data;
+    dashboard_data_snapshot(&data);
+    dashboard_recovery_t recovery;
+    dashboard_data_recovery(&recovery);
+    const int64_t now = esp_timer_get_time();
+    const int64_t updated[] = { data.weather_updated_us, data.alerts_updated_us,
+                              data.alert_details_updated_us, data.energy_updated_us };
+    const dashboard_data_state_t states[] = { data.weather_state, data.alerts_state,
+                                             data.alert_details_state, data.energy_state };
+    static const char *const names[] = { "Погода", "Карта тривог", "Типи загроз", "ЦЕК 5.2" };
+    for (int i = 0; i < 4; ++i) {
+        char age[64];
+        const long long seconds = updated[i] && now >= updated[i] ? (now - updated[i]) / 1000000 : 0;
+        if (!updated[i]) snprintf(age, sizeof(age), "ще не оновлено");
+        else if (seconds < 60) snprintf(age, sizeof(age), "%lld с тому", seconds);
+        else if (seconds < 3600) snprintf(age, sizeof(age), "%lld хв тому", seconds / 60);
+        else snprintf(age, sizeof(age), "%lld год тому", seconds / 3600);
+        lv_label_set_text_fmt(system_sources[i], "%s · %s\n%s", names[i], age, source_state(states[i]));
+    }
+    const char *status = recovery.state == DASH_RECOVERY_FAILED
+        ? "Оновлення не відповідає. Перезавантаж пристрій."
+        : recovery.pending ? "Перезапускаємо оновлення…"
+        : dashboard_wifi_state() != DASH_WIFI_CONNECTED ? "Немає Wi-Fi. Очікуємо підключення."
+        : time(NULL) < 1700000000 ? "Очікуємо синхронізації часу…"
+        : recovery.restarts ? "Оновлення перезапущено. Результати — вище."
+        : "Оновлення працює автоматично.";
+    lv_label_set_text(system_status, status);
+    const bool cooldown = recovery.restarts && now - recovery.restarted_us < DASH_RECOVERY_COOLDOWN_US;
+    lv_obj_set_state(system_restart_button, LV_STATE_DISABLED,
+                     recovery.pending || cooldown || recovery.state == DASH_RECOVERY_FAILED);
+}
+
+static void restart_updates(lv_event_t *event)
+{
+    if (!dashboard_data_restart()) {
+        lv_label_set_text(system_status, "Перезапуск зараз недоступний. Спробуй пізніше.");
+        return;
+    }
+    update_system(NULL);
+}
+
+static void reboot_device(lv_timer_t *timer)
+{
+    esp_restart();
+}
+
+static void confirm_reboot(lv_event_t *event)
+{
+    if (reboot_queued) return;
+    lv_timer_t *timer = lv_timer_create(reboot_device, 300, NULL);
+    if (!timer) {
+        lv_label_set_text(reboot_status, "Не вдалося почати перезавантаження.");
+        return;
+    }
+    lv_timer_set_repeat_count(timer, 1);
+    reboot_queued = true;
+    lv_obj_add_state(reboot_confirm_button, LV_STATE_DISABLED);
+    lv_label_set_text(reboot_status, "Перезавантажуємо…");
+}
+
+static void add_system_screen(void)
+{
+    label(system_screen, "Система", title_font, DASH_COLOR_TEXT, 16, 15);
+    button(system_screen, "Назад", 370, 14, 94, show_screen, settings_screen);
+    label(system_screen, "Останні успішні оновлення", small_font, DASH_COLOR_MUTED, 16, 61);
+    for (int i = 0; i < 4; ++i) {
+        system_sources[i] = label(system_screen, "", small_font, DASH_COLOR_TEXT, 16, 89 + i * 41);
+        lv_obj_set_size(system_sources[i], CARD_WIDTH, 38);
+    }
+    system_status = label(system_screen, "", small_font, DASH_COLOR_WARNING, 16, 260);
+    lv_obj_set_size(system_status, CARD_WIDTH, 43);
+    system_restart_button = button(system_screen, "Перезапустити оновлення", 16, 314, CARD_WIDTH,
+                                    restart_updates, NULL);
+    lv_obj_set_height(system_restart_button, 52);
+    lv_obj_t *reboot = button(system_screen, "Перезавантажити пристрій", 16, 380, CARD_WIDTH,
+                              show_screen, reboot_screen);
+    lv_obj_set_height(reboot, 52);
+    label(system_screen, "Wi-Fi, ключі й тема зберігаються", small_font, DASH_COLOR_MUTED, 16, 448);
+
+    label(reboot_screen, "Перезавантаження", title_font, DASH_COLOR_TEXT, 16, 15);
+    reboot_status = label(reboot_screen,
+        "Перезавантажити пристрій?\n\nWi-Fi, ключі API та налаштування\nзалишаться збереженими.",
+        body_font, DASH_COLOR_TEXT, 16, 102);
+    lv_obj_set_width(reboot_status, CARD_WIDTH);
+    reboot_confirm_button = button(reboot_screen, "Перезавантажити", 16, 270, CARD_WIDTH,
+                                    confirm_reboot, NULL);
+    lv_obj_set_height(reboot_confirm_button, 56);
+    lv_obj_t *cancel = button(reboot_screen, "Скасувати", 16, 344, CARD_WIDTH, show_screen, system_screen);
+    lv_obj_set_height(cancel, 56);
 }
 
 static void update_wifi(lv_timer_t *timer)
@@ -1301,6 +1417,8 @@ esp_err_t dashboard_screen_create(lv_indev_t *touch, esp_err_t (*set_backlight)(
 
     home_screen = create_screen();
     settings_screen = create_screen();
+    system_screen = create_screen();
+    reboot_screen = create_screen();
     schedule_screen = create_screen();
     wifi_screen = create_screen();
     display_settings_screen = create_screen();
@@ -1374,6 +1492,7 @@ esp_err_t dashboard_screen_create(lv_indev_t *touch, esp_err_t (*set_backlight)(
     add_map_screen();
     add_wifi_screen();
     add_settings_screen();
+    add_system_screen();
     add_display_settings_screen();
     add_theme_screen();
     apply_home_layout();
@@ -1386,5 +1505,6 @@ esp_err_t dashboard_screen_create(lv_indev_t *touch, esp_err_t (*set_backlight)(
     lv_timer_create(update_wifi, 250, NULL);
     lv_timer_create(update_wifi_connection, 2000, NULL);
     lv_timer_create(update_remote_data, 1000, NULL);
+    lv_timer_create(update_system, 1000, NULL);
     return ESP_OK;
 }
