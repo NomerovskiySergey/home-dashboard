@@ -135,4 +135,19 @@ static void nationwide_threats(void)
     assert(out.region_threats[63] == 0);
 }
 
-int main(void) { parse_cases(); bounds_and_time(); cache_and_rate(); nationwide_threats(); return 0; }
+static void selected_region(void)
+{
+    const char json[]="{\"alerts\":["
+        "{\"location_uid\":9,\"location_type\":\"oblast\",\"alert_type\":\"air_raid\"},"
+        "{\"location_uid\":14,\"location_type\":\"oblast\",\"alert_type\":\"air_raid\"},"
+        "{\"location_uid\":31,\"location_type\":\"city\",\"location_title\":\"Київ\",\"location_oblast\":\"Київська область\",\"alert_type\":\"air_raid\"},"
+        "{\"location_uid\":30,\"location_type\":\"city\",\"location_title\":\"Севастополь\",\"location_oblast\":\"Автономна Республіка Крим\",\"alert_type\":\"air_raid\"},"
+        "{\"location_uid\":29,\"location_type\":\"oblast\",\"alert_type\":\"air_raid\"}]}";
+    dashboard_alert_details_t out;
+    for(unsigned i=0;i<5;++i) {
+        const unsigned regions[]={12,32,30,40,43};
+        assert(dashboard_alert_details_parse_region(json,strlen(json),regions[i],&out));
+        assert(out.count==1 && out.records[0].oblast);
+    }
+}
+int main(void) { parse_cases(); bounds_and_time(); cache_and_rate(); nationwide_threats(); selected_region(); return 0; }

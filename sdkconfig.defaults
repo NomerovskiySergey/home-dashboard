@@ -16,3 +16,6 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_CROSS_SIGNED_VERIFY=y
 # Concurrent service TLS contexts use PSRAM, preserving internal RAM for Wi-Fi and task stacks.
 CONFIG_MBEDTLS_INTERNAL_MEM_ALLOC=n
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+
+# Keep ordinary UI/font allocations in PSRAM; reserve internal RAM for stacks and AES DMA.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0

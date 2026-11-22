@@ -32,6 +32,7 @@ static int creates, registered, fail_create, stalled=-1, oom=-1;
 static LONG stop, live_clients, requests[3], sntp_inits, sntp_starts;
 static LONG64 offset_us;
 static bool missing_keys, offline, automatic_case;
+static int location_case;
 static HANDLE release_request;
 static __declspec(thread) int service=-1;
 static SRWLOCK memory_lock=SRWLOCK_INIT;
@@ -101,6 +102,9 @@ esp_err_t nvs_flash_init_partition(const char *p) { return ESP_OK; }
 esp_err_t nvs_open_from_partition(const char *p,const char *ns,int mode,nvs_handle_t *h) { *h=1;return ESP_OK; }
 esp_err_t nvs_get_str(nvs_handle_t h,const char *key,char *out,size_t *n)
 { if(missing_keys) return ESP_FAIL;strcpy(out,"fake-key");*n=9;return ESP_OK; }
+esp_err_t nvs_open(const char *ns,int m,nvs_handle_t *h) { *h=1; return ESP_OK; }
+esp_err_t nvs_set_str(nvs_handle_t h,const char *k,const char *v) { return ESP_OK; }
+esp_err_t nvs_commit(nvs_handle_t h) { return ESP_OK; }
 void nvs_close(nvs_handle_t h) {}
 dashboard_wifi_state_t dashboard_wifi_state(void) { return offline?DASH_WIFI_OFFLINE:DASH_WIFI_CONNECTED; }
 static unsigned __stdcall run(void *p) { task_t *task=p;service=task->service;task->fn(task->arg);return 0; }
@@ -124,6 +128,7 @@ int main(int argc,char **argv)
     if(argc>4) missing_keys=atoi(argv[4])!=0;
     if(argc>5) offline=atoi(argv[5])!=0;
     if(argc>6) automatic_case=atoi(argv[6])!=0;
+    if(argc>7) location_case=atoi(argv[7]);
     release_request=CreateEvent(NULL,TRUE,FALSE,NULL);assert(release_request);
     const esp_err_t started=dashboard_data_start();
     assert(started==(fail_create?ESP_ERR_NO_MEM:ESP_OK));
@@ -137,6 +142,28 @@ int main(int argc,char **argv)
         if(registered) assert(WaitForMultipleObjects(registered,threads,TRUE,3000)==WAIT_OBJECT_0);
         assert(live_clients==0&&allocation_count==0&&sntp_inits==0);
         dashboard_recovery_t r;dashboard_data_recovery(&r);assert(r.state==DASH_RECOVERY_FAILED);
+    } else if(location_case) {
+        if(!offline) wait_fresh(stalled);
+        const dashboard_city_t *kyiv=dashboard_city_find("UA80000000000093317");
+        dashboard_data_snapshot_t before,after;
+        dashboard_data_snapshot(&before);
+        assert(dashboard_data_select_location(kyiv)==ESP_OK);
+        if(location_case==2) assert(dashboard_data_select_location(dashboard_city_default())==ESP_OK);
+        dashboard_data_snapshot(&after);
+        assert(after.location_generation>before.location_generation);
+        assert(!after.weather_updated_us);
+        if(offline) { Sleep(50); assert(!fresh_except(-1)); offline=false; }
+        if(stalled>=0) SetEvent(release_request);
+        wait_fresh(-1);
+        dashboard_data_snapshot(&after);
+        assert(after.location==(location_case==2?dashboard_city_default():kyiv));
+        if(before.energy_updated_us) assert(after.energy_updated_us==before.energy_updated_us);
+        dashboard_recovery_t r;dashboard_data_recovery(&r);assert(!r.pending&&!r.restarts);
+        /* A completed normal request is scheduled 600s away; switch must refresh promptly. */
+        const uint32_t old_generation=after.location_generation;
+        assert(dashboard_data_select_location(after.location==kyiv?dashboard_city_default():kyiv)==ESP_OK);
+        wait_fresh(-1);dashboard_data_snapshot(&after);
+        assert(after.location_generation==old_generation+1);
     } else if(offline||missing_keys) {
         if(missing_keys&&!offline) {
             dashboard_data_snapshot_t s;
@@ -218,7 +245,7 @@ class Workers(unittest.TestCase):
             (path / "strings.h").write_text('#include <string.h>\n#define strcasecmp _stricmp\n')
             (path / "fixture.c").write_text(FIXTURE, encoding="utf-8")
             cjson = ROOT / "managed_components/espressif__cjson/cJSON"
-            sources = [path / "fixture.c", ROOT / "main/dashboard_recovery.c",
+            sources = [path / "fixture.c", ROOT / "main/dashboard_recovery.c", ROOT / "main/dashboard_location.c",
                        ROOT / "main/dashboard_data_parse.c", ROOT / "main/dashboard_energy_parse.c",
                        ROOT / "main/dashboard_alert_details.c", cjson / "cJSON.c"]
             executable = path / "workers.exe"
@@ -230,7 +257,9 @@ class Workers(unittest.TestCase):
             for arguments in [[-1], [0], [1], [2], *[[-1, n] for n in range(1, 5)],
                               [-1, 0, 2], [-1, 0, 1], [-1, 0, -1, 1, 1],
                               [-1, 0, -1, 1, 0], [-1, 0, -1, 0, 1],
-                              *[[n, 0, -1, 0, 0, 1] for n in range(3)]]:
+                              *[[n, 0, -1, 0, 0, 1] for n in range(3)],
+                              [-1,0,-1,0,0,0,1], [0,0,-1,0,0,0,1],
+                              [0,0,-1,0,0,0,2], [-1,0,-1,0,1,0,1]]:
                 with self.subTest(arguments=arguments):
                     run = subprocess.run([str(executable), *map(str, arguments)], cwd=path,
                                          capture_output=True, text=True, timeout=15)

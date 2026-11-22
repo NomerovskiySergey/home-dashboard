@@ -121,7 +121,7 @@ bool dashboard_alert_is_local(const cJSON *item)
     return dashboard_alert_uid_is(item,"location_uid",9) || dashboard_alert_uid_is(item,"location_oblast_uid",9);
 }
 
-static void record(const cJSON *item,dashboard_alert_details_t *out)
+static void record(const cJSON *item,dashboard_alert_details_t *out,unsigned selected_region)
 {
     if (strcmp(field(item,"alert_type"),"air_raid")) return;
     const cJSON *finished=cJSON_GetObjectItemCaseSensitive(item,"finished_at");
@@ -172,12 +172,12 @@ static void record(const cJSON *item,dashboard_alert_details_t *out)
             if (!strcmp(field(entry,"threat_type"),threat_codes[i])) type=i;
         out->region_threats[region] |= (uint16_t)(1u << type);
     }
-    if (!dashboard_alert_is_local(item)) return;
+    if (!region || region != selected_region) return;
     if (out->count==DASH_ALERT_RECORDS) { ++out->omitted; return; }
     dashboard_alert_record_t *r=&out->records[out->count++];
     const char *location=field(item,"location_title");
     dashboard_alert_copy_text(r->location,sizeof(r->location),*location ? location : "Локацію не вказано");
-    r->oblast=!strcmp(field(item,"location_type"),"oblast");
+    r->oblast=oblast || region==30 || region==40;
     r->level=!strcmp(field(item,"alert_level"),"red") ? 'R' : !strcmp(field(item,"alert_level"),"yellow") ? 'Y' : 0;
     r->started_at=dashboard_alert_parse_utc(field(item,"started_at"));
     const char *message=field(item,"notes");
@@ -272,14 +272,20 @@ done:
     return valid;
 }
 
-static void visit_details(const cJSON *item,void *context) { record(item,context); }
+typedef struct { dashboard_alert_details_t *out; unsigned region; } details_context_t;
+static void visit_details(const cJSON *item,void *context)
+{ details_context_t *selected=context; record(item,selected->out,selected->region); }
 
 bool dashboard_alert_details_parse(const char *body,size_t length,dashboard_alert_details_t *out)
+{ return dashboard_alert_details_parse_region(body,length,12,out); }
+
+bool dashboard_alert_details_parse_region(const char *body,size_t length,unsigned region,dashboard_alert_details_t *out)
 {
     if (!out) return false;
     dashboard_alert_details_t *parsed=calloc(1,sizeof(*parsed));
     if (!parsed) return false;
-    const bool valid=dashboard_alert_visit(body,length,DASH_ALERT_BODY_CAPACITY,visit_details,parsed);
+    details_context_t context={parsed,region};
+    const bool valid=dashboard_alert_visit(body,length,DASH_ALERT_BODY_CAPACITY,visit_details,&context);
     if (valid) *out=*parsed;
     free(parsed);
     return valid;

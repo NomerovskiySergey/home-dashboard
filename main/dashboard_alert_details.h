@@ -35,6 +35,8 @@ typedef struct {
 } dashboard_alert_rate_t;
 
 bool dashboard_alert_details_parse(const char *body, size_t length, dashboard_alert_details_t *out);
+bool dashboard_alert_details_parse_region(const char *body, size_t length, unsigned region,
+                                         dashboard_alert_details_t *out);
 void dashboard_alert_copy_text(char *out, size_t capacity, const char *text);
 int64_t dashboard_alert_parse_utc(const char *text);
 int64_t dashboard_alert_elapsed(int64_t started, int64_t now);
