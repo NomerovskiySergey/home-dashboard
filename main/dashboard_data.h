@@ -7,6 +7,7 @@
 #include "dashboard_data_parse.h"
 #include "dashboard_alert_details.h"
 #include "dashboard_recovery.h"
+#include "dashboard_location.h"
 
 typedef enum {
     DASH_DATA_WAITING,
@@ -18,6 +19,8 @@ typedef enum {
 } dashboard_data_state_t;
 
 typedef struct {
+    const dashboard_city_t *location;
+    uint32_t location_generation;
     dashboard_data_state_t weather_state;
     dashboard_data_state_t alerts_state;
     int temperature_tenths;
@@ -32,6 +35,8 @@ typedef struct {
 } dashboard_data_snapshot_t;
 
 esp_err_t dashboard_data_start(void);
+/* Called by the UI task; persist before publishing the new selection. */
+esp_err_t dashboard_data_select_location(const dashboard_city_t *city);
 /* Nonblocking request to all three service workers; each owns its cleanup. */
 bool dashboard_data_restart(void);
 void dashboard_data_recovery(dashboard_recovery_t *out);

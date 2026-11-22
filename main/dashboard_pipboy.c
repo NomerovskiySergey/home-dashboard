@@ -12,7 +12,7 @@ static void line(lv_layer_t *layer, lv_draw_line_dsc_t *style,
 
 void dashboard_pipboy_draw(lv_layer_t *layer, const lv_area_t *map,
                            lv_color_t frame, lv_color_t ink, lv_color_t marker,
-                           lv_color_t alert)
+                           lv_color_t alert, int marker_x, int marker_y)
 {
     lv_draw_rect_dsc_t outline;
     lv_draw_rect_dsc_init(&outline);
@@ -55,9 +55,9 @@ void dashboard_pipboy_draw(lv_layer_t *layer, const lv_area_t *map,
     outline.border_color = frame;
     lv_draw_rect(layer, &outline, map);
 
-    // Dnipro reticle uses the same scaled map coordinates as the renderer.
-    const int x = map->x1 + UA_MAP_DNIPRO_X * lv_area_get_width(map) / UA_MAP_WIDTH;
-    const int y = map->y1 + UA_MAP_DNIPRO_Y * lv_area_get_height(map) / UA_MAP_HEIGHT;
+    // Selected city reticle uses the same scaled map coordinates as the renderer.
+    const int x = map->x1 + marker_x * lv_area_get_width(map) / UA_MAP_WIDTH;
+    const int y = map->y1 + marker_y * lv_area_get_height(map) / UA_MAP_HEIGHT;
     outline.border_color = marker;
     lv_draw_rect(layer, &outline, &(lv_area_t){x - 3, y - 3, x + 3, y + 3});
     stroke.color = marker;

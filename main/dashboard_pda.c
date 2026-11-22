@@ -49,7 +49,7 @@ static void icon(lv_layer_t *layer, int x, int y, lv_color_t color,
 
 void dashboard_pda_draw(lv_layer_t *layer, const lv_area_t *map,
                         lv_color_t frame, lv_color_t ink, lv_color_t marker,
-                        lv_color_t alert)
+                        lv_color_t alert, int marker_x, int marker_y)
 {
     lv_draw_rect_dsc_t rim;
     lv_draw_rect_dsc_init(&rim);
@@ -81,11 +81,11 @@ void dashboard_pda_draw(lv_layer_t *layer, const lv_area_t *map,
         }
     }
 
-    const int dnipro_x = map->x1 + UA_MAP_DNIPRO_X * lv_area_get_width(map) / UA_MAP_WIDTH;
-    const int dnipro_y = map->y1 + UA_MAP_DNIPRO_Y * lv_area_get_height(map) / UA_MAP_HEIGHT;
+    const int city_x = map->x1 + marker_x * lv_area_get_width(map) / UA_MAP_WIDTH;
+    const int city_y = map->y1 + marker_y * lv_area_get_height(map) / UA_MAP_HEIGHT;
     rim.border_color = marker;
-    lv_draw_rect(layer, &rim, &(lv_area_t){dnipro_x - 4, dnipro_y - 4, dnipro_x + 4, dnipro_y + 4});
-    line(layer, &stroke, dnipro_x - 1, dnipro_y, dnipro_x + 1, dnipro_y);
+    lv_draw_rect(layer, &rim, &(lv_area_t){city_x - 4, city_y - 4, city_x + 4, city_y + 4});
+    line(layer, &stroke, city_x - 1, city_y, city_x + 1, city_y);
 
     DRAW_ICON(layer, 24, 26, ink, crosshair);
     DRAW_ICON(layer, 28, 89, alert, warning);

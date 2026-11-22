@@ -25,7 +25,6 @@ enum {
     MARGIN = 16,
     CARD_WIDTH = SCREEN_WIDTH - MARGIN * 2,
     MINUTES_PER_DAY = 24 * 60,
-    DNIPRO_REGION = 12,
     SETTING_NIGHT = 1 << 0,
     SETTING_ECO = 1 << 1,
     SETTING_ALERT_WAKE = 1 << 2,
@@ -68,6 +67,16 @@ static lv_obj_t *schedule_screen;
 static lv_obj_t *wifi_screen;
 static lv_obj_t *display_settings_screen;
 static lv_obj_t *display_settings_note;
+static lv_obj_t *location_screen, *city_screen, *location_list, *city_list;
+static lv_obj_t *location_current, *location_error, *city_heading, *full_map_selected;
+static lv_obj_t *location_rows[8], *location_extent;
+static bool location_rows_updating;
+static const dashboard_city_t *selected_city;
+static lv_obj_t *city_rows[8], *city_extent;
+static const dashboard_region_t *city_region;
+static unsigned city_count;
+static bool city_rows_updating;
+static uint32_t selected_generation=UINT32_MAX;
 static lv_obj_t *theme_screen;
 static lv_obj_t *theme_name;
 static lv_obj_t *theme_note;
@@ -123,6 +132,7 @@ static void update_full_map(void);
 static void open_map(lv_event_t *event);
 static void update_remote_data(lv_timer_t *timer);
 static void update_system(lv_timer_t *timer);
+static void prepare_location_list(void);
 
 static void apply_theme_styles(const dashboard_palette_t *next)
 {
@@ -171,6 +181,7 @@ static lv_obj_t *surface(lv_obj_t *parent, int x, int y, int width, int height,
 static void show_screen(lv_event_t *event)
 {
     lv_obj_t *target = lv_event_get_user_data(event);
+    if(target==location_screen) prepare_location_list();
     lv_screen_load(target);
     if (target == wifi_screen) update_wifi_connection(NULL);
     if (target == system_screen) update_system(NULL);
@@ -288,8 +299,8 @@ static esp_err_t add_map(lv_obj_t *card)
     lv_obj_set_pos(map_canvas, 12, 78);
     lv_obj_set_clickable(map_canvas, true);
     lv_obj_add_event_cb(map_canvas, open_map, LV_EVENT_CLICKED, NULL);
-    home.map_marker = surface(card, 12 + UA_MAP_DNIPRO_X - 4,
-                              78 + UA_MAP_DNIPRO_Y - 4,
+    home.map_marker = surface(card, 12 + selected_city->map_x - 4,
+                              78 + selected_city->map_y - 4,
                               9, 9, DASH_COLOR_MAP_MARKER, 5);
     return ESP_OK;
 }
@@ -416,15 +427,23 @@ static void add_display_switch(int y, const char *name, const char *description,
     lv_obj_add_event_cb(control, change_display_setting, LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)setting);
 }
 
+static void layout_city_title(lv_obj_t *object, const lv_font_t *font, int x, int width)
+{
+    lv_obj_set_style_text_font(object, font, 0);
+    lv_obj_set_size(object, width, lv_font_get_line_height(font));
+    lv_obj_set_pos(object, x, 23);
+    lv_label_set_long_mode(object, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+}
+
 static void apply_home_layout(void)
 {
     const bool compact = theme->home_layout != DASH_HOME_STANDARD;
     lv_obj_set_hidden(home.header, !compact);
     if (home.map_marker) lv_obj_set_hidden(home.map_marker, compact);
 
-    lv_label_set_text(home.city, compact ? "ДНІПРО" : "Дніпро");
-    lv_obj_set_style_text_font(home.city, compact ? pda_value_font : body_font, 0);
-    lv_obj_set_pos(home.city, compact ? 44 : 16, 23);
+    lv_label_set_text(home.city, selected_city->name);
+    layout_city_title(home.city, compact ? pda_value_font : body_font,
+                      compact ? 44 : 16, compact ? 96 : 120);
     lv_obj_set_style_text_font(home_clock, compact ? pda_clock_font : title_font, 0);
     lv_obj_set_pos(home_clock, 147, compact ? 12 : 10);
     lv_obj_set_style_text_font(weather_value, compact ? pda_value_font : title_font, 0);
@@ -461,13 +480,13 @@ static void draw_home_instruments(lv_event_t *event)
     lv_area_t map;
     lv_obj_get_coords(map_canvas, &map);
     void (*draw)(lv_layer_t *, const lv_area_t *, lv_color_t, lv_color_t,
-                 lv_color_t, lv_color_t) =
+                 lv_color_t, lv_color_t, int, int) =
         theme->home_layout == DASH_HOME_PIPBOY ? dashboard_pipboy_draw : dashboard_pda_draw;
     draw(lv_event_get_layer(event), &map,
          lv_color_hex(palette->colors[DASH_COLOR_PANEL_BORDER]),
          lv_color_hex(palette->colors[DASH_COLOR_MUTED]),
          lv_color_hex(palette->colors[DASH_COLOR_MAP_MARKER]),
-         lv_obj_get_style_text_color(alert_value, LV_PART_MAIN));
+         lv_obj_get_style_text_color(alert_value, LV_PART_MAIN), selected_city->map_x, selected_city->map_y);
 }
 
 static void change_theme(lv_event_t *event)
@@ -805,6 +824,175 @@ static void add_settings_screen(void)
     lv_obj_t *system = button(settings_screen, "Система", 16, 246, CARD_WIDTH,
                               show_screen, system_screen);
     lv_obj_set_height(system, 64);
+    lv_obj_t *location = button(settings_screen, "Локація", 16, 326, CARD_WIDTH,
+                               show_screen, location_screen);
+    lv_obj_set_height(location, 64);
+}
+
+static void select_city(lv_event_t *event)
+{
+    const dashboard_city_t *city=lv_obj_get_user_data(lv_event_get_target_obj(event));
+    if(!city) return;
+    const esp_err_t result=dashboard_data_select_location(city);
+    if(result!=ESP_OK) {
+        lv_label_set_text(location_error,"Не вдалося зберегти. Спробуйте ще раз.");
+        return;
+    }
+    lv_label_set_text(location_error,"");
+    lv_screen_load(home_screen);
+    update_remote_data(NULL);
+}
+
+/* Native strokes avoid requiring a checkmark glyph in the bundled text font. */
+static void draw_selected_city(lv_event_t *event)
+{
+    lv_obj_t *row=lv_event_get_target_obj(event);
+    if(lv_obj_get_user_data(row)!=selected_city || !selected_city) return;
+    lv_area_t bounds;
+    lv_obj_get_coords(row,&bounds);
+    const int x=bounds.x2-25, y=(bounds.y1+bounds.y2)/2;
+    lv_draw_line_dsc_t stroke;
+    lv_draw_line_dsc_init(&stroke);
+    stroke.color=lv_obj_get_style_text_color(lv_obj_get_child(row,0),LV_PART_MAIN);
+    stroke.width=2;
+    stroke.round_start=stroke.round_end=true;
+    stroke.p1=(lv_point_precise_t){x,y};
+    stroke.p2=(lv_point_precise_t){x+5,y+5};
+    lv_draw_line(lv_event_get_layer(event),&stroke);
+    stroke.p1=stroke.p2;
+    stroke.p2=(lv_point_precise_t){x+15,y-6};
+    lv_draw_line(lv_event_get_layer(event),&stroke);
+}
+
+/* Keep only the visible window of rows, independent of the territory's city count. */
+static void refresh_city_rows(lv_event_t *event)
+{
+    if(city_rows_updating || !city_region) return;
+    city_rows_updating=true;
+    int first=lv_obj_get_scroll_y(city_list)/58;
+    if(first<0) first=0;
+    if(first>=(int)city_count) first=city_count ? (int)city_count-1 : 0;
+    const dashboard_city_t *visible[8]={0};
+    unsigned index=0;
+    for(size_t i=0;i<dashboard_city_count();++i) {
+        const dashboard_city_t *city=dashboard_city_at(i);
+        if(city->region!=city_region->code) continue;
+        if(index>=(unsigned)first && index<(unsigned)first+8) visible[index-(unsigned)first]=city;
+        ++index;
+    }
+    for(unsigned i=0;i<8;++i) {
+        lv_obj_t *row=city_rows[i];
+        if(!row) continue;
+        const dashboard_city_t *city=visible[i];
+        lv_obj_set_user_data(row,(void *)city);
+        lv_obj_set_hidden(row,!city);
+        if(!city) continue;
+        lv_obj_set_y(row,(first+(int)i)*58);
+        lv_label_set_text(lv_obj_get_child(row,0),city->name);
+        lv_obj_invalidate(row);
+    }
+    city_rows_updating=false;
+}
+
+static void open_city_list(lv_event_t *event)
+{
+    city_rows_updating=true;
+    city_region=lv_obj_get_user_data(lv_event_get_target_obj(event));
+    lv_obj_clean(city_list);
+    memset(city_rows,0,sizeof(city_rows));
+    city_count=0;
+    for(size_t i=0;i<dashboard_city_count();++i)
+        if(dashboard_city_at(i)->region==city_region->code) ++city_count;
+    lv_obj_scroll_to_y(city_list,0,LV_ANIM_OFF);
+    lv_label_set_text(city_heading,city_region->name);
+    lv_label_set_text(location_error,"");
+    city_extent=surface(city_list,0,0,1,(int)city_count*58,DASH_COLOR_BACKGROUND,0);
+    const unsigned rows=city_count<8 ? city_count : 8;
+    for(unsigned i=0;i<rows;++i) {
+        city_rows[i]=button(city_list,"",0,(int)i*58,430,select_city,NULL);
+        lv_obj_set_height(city_rows[i],50);
+        lv_obj_add_event_cb(city_rows[i],draw_selected_city,LV_EVENT_DRAW_POST,NULL);
+        lv_obj_t *name=lv_obj_get_child(city_rows[i],0);
+        lv_obj_set_width(name,374);
+        lv_obj_align(name,LV_ALIGN_LEFT_MID,0,0);
+        lv_obj_set_height(name,lv_font_get_line_height(body_font));
+        lv_label_set_long_mode(name,LV_LABEL_LONG_DOT);
+    }
+    city_rows_updating=false;
+    refresh_city_rows(NULL);
+    ESP_LOGI("dashboard_screen","City list total=%u rows=%u internal_free=%u largest=%u psram_free=%u",
+             city_count,rows,(unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+    lv_screen_load(city_screen);
+}
+
+static void refresh_location_rows(lv_event_t *event)
+{
+    if(location_rows_updating || !location_extent) return;
+    location_rows_updating=true;
+    int first=lv_obj_get_scroll_y(location_list)/58;
+    if(first<0) first=0;
+    const unsigned count=(unsigned)dashboard_region_count();
+    if(first>=(int)count) first=(int)count-1;
+    for(unsigned i=0;i<8;++i) {
+        const dashboard_region_t *region=dashboard_region_at((size_t)first+i);
+        lv_obj_t *row=location_rows[i];
+        lv_obj_set_user_data(row,(void *)region);
+        lv_obj_set_hidden(row,!region);
+        if(!region) continue;
+        lv_obj_set_y(row,(first+(int)i)*58);
+        lv_label_set_text(lv_obj_get_child(row,0),region->name);
+    }
+    location_rows_updating=false;
+}
+
+static void prepare_location_list(void)
+{
+    if(lv_obj_get_child_count(location_list)) return;
+    location_rows_updating=true;
+    lv_obj_scroll_to_y(location_list,0,LV_ANIM_OFF);
+    location_extent=surface(location_list,0,0,1,(int)dashboard_region_count()*58,DASH_COLOR_BACKGROUND,0);
+    for(unsigned i=0;i<8;++i) {
+        location_rows[i]=button(location_list,"",0,(int)i*58,430,open_city_list,NULL);
+        lv_obj_set_height(location_rows[i],50);
+        lv_obj_t *name=lv_obj_get_child(location_rows[i],0);
+        lv_obj_set_width(name,398);
+        lv_obj_set_height(name,lv_font_get_line_height(body_font));
+        lv_label_set_long_mode(name,LV_LABEL_LONG_DOT);
+    }
+    location_rows_updating=false;
+    refresh_location_rows(NULL);
+}
+
+static lv_obj_t *location_scroller(lv_obj_t *screen,int y,int height)
+{
+    lv_obj_t *list=surface(screen,16,y,CARD_WIDTH,height,DASH_COLOR_BACKGROUND,0);
+    lv_obj_set_scrollable(list,true);
+    lv_obj_set_scroll_dir(list,LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(list,LV_SCROLLBAR_MODE_AUTO);
+    return list;
+}
+
+static void add_location_screens(void)
+{
+    label(location_screen,"Локація",title_font,DASH_COLOR_TEXT,16,15);
+    button(location_screen,"Назад",370,14,94,show_screen,settings_screen);
+    location_current=label(location_screen,"",body_font,DASH_COLOR_MUTED,16,60);
+    lv_obj_set_width(location_current,440);
+    lv_label_set_long_mode(location_current,LV_LABEL_LONG_DOT);
+    location_list=location_scroller(location_screen,98,352);
+    lv_obj_add_event_cb(location_list,refresh_location_rows,LV_EVENT_SCROLL,NULL);
+    label(city_screen,"Місто",title_font,DASH_COLOR_TEXT,16,15);
+    button(city_screen,"Назад",370,14,94,show_screen,location_screen);
+    city_heading=label(city_screen,"",body_font,DASH_COLOR_MUTED,16,60);
+    lv_obj_set_width(city_heading,440);
+    lv_label_set_long_mode(city_heading,LV_LABEL_LONG_DOT);
+    city_list=location_scroller(city_screen,98,316);
+    lv_obj_add_event_cb(city_list,refresh_city_rows,LV_EVENT_SCROLL,NULL);
+    location_error=label(city_screen,"",small_font,DASH_COLOR_ALARM,16,426);
+    lv_obj_set_width(location_error,440);
+    label(location_screen,"Погода й тривоги · графік ЦЕК окремо",small_font,DASH_COLOR_MUTED,16,456);
 }
 
 static const char *source_state(dashboard_data_state_t state)
@@ -1027,7 +1215,7 @@ static void update_alert_card(const dashboard_data_snapshot_t *data)
     const char *note = "Очікування даних";
     dashboard_color_t color = DASH_COLOR_MUTED;
     if (data->alerts_state == DASH_DATA_FRESH) {
-        switch (data->region_alerts[DNIPRO_REGION]) {
+        switch (data->region_alerts[data->location->region]) {
         case 'R':
             status = "Повітряна тривога";
             color = DASH_COLOR_ALARM;
@@ -1037,7 +1225,8 @@ static void update_alert_card(const dashboard_data_snapshot_t *data)
             color = DASH_COLOR_WARNING;
             break;
         case 'P':
-            status = "Часткова тривога в області";
+            status = data->location->region==30 || data->location->region==40
+                     ? "Часткова тривога на території" : "Часткова тривога в області";
             color = DASH_COLOR_WARNING;
             break;
         case 'N':
@@ -1071,13 +1260,13 @@ static void update_alert_card(const dashboard_data_snapshot_t *data)
         set_label_if_changed(alert_note, note);
     }
     set_label_if_changed(alert_threat, "Торкніться карти ›");
-    if (data->alerts_state != DASH_DATA_FRESH || data->region_alerts[DNIPRO_REGION] == 'N') return;
+    if (data->alerts_state != DASH_DATA_FRESH || data->region_alerts[data->location->region] == 'N') return;
     if (data->alert_details_state != DASH_DATA_FRESH) {
         set_label_if_changed(alert_threat, "Типи загроз недоступні");
         return;
     }
     const dashboard_alert_record_t *primary = dashboard_alert_primary(&screen_alert_details,
-                                                                      data->region_alerts[DNIPRO_REGION]);
+                                                                      data->region_alerts[data->location->region]);
     if (primary) {
         char clock[6], text[96];
         const int64_t minutes = dashboard_alert_elapsed(primary->started_at, (int64_t)time(NULL));
@@ -1251,6 +1440,11 @@ static void update_full_map(void)
         lv_obj_set_hidden(map_city_dots[i], !visible);
         if (visible) lv_obj_set_pos(map_city_dots[i], x - 2, y - 2);
     }
+    if(full_map_selected) {
+        int x,y;
+        dashboard_map_project(selected_city->map_x,selected_city->map_y,&x,&y);
+        lv_obj_set_pos(full_map_selected,x-4,y-4);
+    }
     full_map_dirty = false;
 }
 
@@ -1285,6 +1479,8 @@ static void open_map(lv_event_t *event)
             map_cities[i] = label(full_map_viewport, ua_map_cities[i].name, small_font, DASH_COLOR_TEXT, 0, 0);
         }
     }
+    if(!full_map_selected)
+        full_map_selected=surface(full_map_viewport,0,0,9,9,DASH_COLOR_MAP_MARKER,5);
     full_map_dirty = true;
     lv_screen_load(map_screen);
     update_remote_data(NULL);
@@ -1317,13 +1513,51 @@ static void add_map_screen(void)
 
 static void update_remote_data(lv_timer_t *timer)
 {
+    /* Timer dispatch occurs after touch callbacks, so the clicked row is no longer in use. */
+    if(timer && lv_screen_active()!=city_screen && lv_obj_get_child_count(city_list)) {
+        city_rows_updating=true;
+        city_region=NULL;
+        lv_obj_clean(city_list);
+        memset(city_rows,0,sizeof(city_rows));
+        city_extent=NULL;
+        city_count=0;
+        city_rows_updating=false;
+        ESP_LOGI("dashboard_screen","City rows released internal_free=%u largest=%u psram_free=%u",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+    }
+    if(timer && lv_screen_active()!=location_screen && lv_obj_get_child_count(location_list)) {
+        location_rows_updating=true;
+        lv_obj_clean(location_list);
+        memset(location_rows,0,sizeof(location_rows));
+        location_extent=NULL;
+        location_rows_updating=false;
+        ESP_LOGI("dashboard_screen","Region rows released internal_free=%u largest=%u psram_free=%u",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
+    }
     dashboard_data_snapshot_t data;
     dashboard_data_snapshot(&data);
+    if(selected_generation!=data.location_generation) {
+        selected_city=data.location;
+        selected_generation=data.location_generation;
+        display_mode.alert_known=false;
+        set_label_if_changed(home.city,selected_city->name);
+        set_label_if_changed(home.alert_heading,dashboard_region_find(selected_city->region)->name);
+        char current[128];
+        snprintf(current,sizeof(current),"Обрано: %s",selected_city->name);
+        set_label_if_changed(location_current,current);
+        if(home.map_marker) lv_obj_set_pos(home.map_marker,12+selected_city->map_x-4,78+selected_city->map_y-4);
+        full_map_dirty=true;
+        lv_obj_invalidate(home_screen);
+    }
     if (!dashboard_data_alert_details(&screen_alert_details, &data)) data.alert_details_state = DASH_DATA_STALE;
     const int64_t now_ms = esp_timer_get_time() / 1000;
     dashboard_display_idle(&display_mode, now_ms);
     if (dashboard_display_alert(&display_mode, data.alerts_state == DASH_DATA_FRESH,
-                                data.region_alerts[DNIPRO_REGION], now_ms) &&
+                                data.region_alerts[data.location->region], now_ms) &&
         !setup_in_progress(dashboard_wifi_state())) {
         lv_screen_load(home_screen);
     }
@@ -1415,6 +1649,11 @@ esp_err_t dashboard_screen_create(lv_indev_t *touch, esp_err_t (*set_backlight)(
     theme = dashboard_theme_find(theme_id);
     apply_theme_styles(&theme->day);
 
+    dashboard_data_snapshot_t initial;
+    dashboard_data_snapshot(&initial);
+    selected_city=initial.location ? initial.location : dashboard_city_default();
+    location_screen=create_screen();
+    city_screen=create_screen();
     home_screen = create_screen();
     settings_screen = create_screen();
     system_screen = create_screen();
@@ -1426,7 +1665,7 @@ esp_err_t dashboard_screen_create(lv_indev_t *touch, esp_err_t (*set_backlight)(
     theme_screen = create_screen();
 
     home.header = surface(home_screen, MARGIN, 10, CARD_WIDTH, 48, DASH_COLOR_PANEL, 12);
-    home.city = label(home_screen, "Дніпро", title_font, DASH_COLOR_TEXT, 16, 8);
+    home.city = label(home_screen, selected_city->name, title_font, DASH_COLOR_TEXT, 16, 8);
     home_clock = label(home_screen, "--:--", title_font, DASH_COLOR_CLOCK, 0, 0);
 
     home.settings_key = button(home_screen, LV_SYMBOL_SETTINGS, 420, 10, 44, show_screen, settings_screen);
@@ -1451,7 +1690,7 @@ esp_err_t dashboard_screen_create(lv_indev_t *touch, esp_err_t (*set_backlight)(
     home.alert_card = local_alert;
     lv_obj_set_clickable(local_alert, true);
     lv_obj_add_event_cb(local_alert, open_map, LV_EVENT_CLICKED, NULL);
-    home.alert_heading = label(local_alert, "Дніпропетровська область", small_font, DASH_COLOR_MUTED, 12, 4);
+    home.alert_heading = label(local_alert, dashboard_region_find(selected_city->region)->name, small_font, DASH_COLOR_MUTED, 12, 4);
     alert_value = label(local_alert, "Статус невідомий", body_font, DASH_COLOR_MUTED, 12, 23);
     alert_note = label(local_alert, "", small_font, DASH_COLOR_MUTED, 12, 49);
     alert_threat = label(local_alert, "Торкніться карти ›", small_font, DASH_COLOR_MUTED, 12, 67);
@@ -1491,6 +1730,7 @@ esp_err_t dashboard_screen_create(lv_indev_t *touch, esp_err_t (*set_backlight)(
     add_schedule_screen();
     add_map_screen();
     add_wifi_screen();
+    add_location_screens();
     add_settings_screen();
     add_system_screen();
     add_display_settings_screen();
