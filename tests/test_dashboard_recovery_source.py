@@ -139,6 +139,28 @@ esp_err_t esp_http_client_perform(esp_http_client_handle_t c)
         esp_http_client_event_t e={.event_id=HTTP_EVENT_ON_DATA,.data=(char *)json,.data_len=(int)strlen(json),.user_data=http_config.user_data};
         http_config.event_handler(&e);
     }
+    if(mode>=20) {
+        if(mode==21 || mode==22) {
+            assert(dashboard_data_energy_catalog_request(DASH_ENERGY_SUPPLIERS,"kyiv",NULL));
+            assert(dashboard_data_energy_catalog_request(DASH_ENERGY_AREAS,NULL,NULL));
+        }
+        const char *json="[{\"slug\":\"kyiv\",\"name\":\"Київ\",\"katottg\":\"UA80000000000093317\"}]";
+        esp_http_client_event_t e={.event_id=HTTP_EVENT_ON_DATA,.data=(char *)json,.data_len=(int)strlen(json),.user_data=http_config.user_data};
+        http_config.event_handler(&e);
+        return ESP_OK;
+    }
+    if(mode>=10) {
+        dashboard_energy_selection_t next=latest.energy_selection;
+        strcpy(next.queue,"1.1");
+        if(mode==10 || mode==11 || mode==13) {
+            assert(dashboard_data_select_energy(&next)==ESP_OK);
+            if(mode==11) { strcpy(next.queue,"5.2"); assert(dashboard_data_select_energy(&next)==ESP_OK); }
+        }
+        const char *json="[{\"initiator\":\"dnipropetrovska_oblast_cek\",\"queue\":\"5.2\",\"today_date\":\"2026-11-23\",\"today_status\":\"NoShutdowns\",\"tomorrow_date\":\"2026-11-24\",\"tomorrow_status\":\"WaitingForSchedule\"}]";
+        esp_http_client_event_t e={.event_id=HTTP_EVENT_ON_DATA,.data=(char *)json,.data_len=(int)strlen(json),.user_data=http_config.user_data};
+        http_config.event_handler(&e);
+        return ESP_OK;
+    }
     if(mode>=7) {
         if(mode==7 || mode==9)
             assert(dashboard_data_select_location(dashboard_city_find("UA80000000000093317"))==ESP_OK);
@@ -206,8 +228,58 @@ int main(void)
 {
     assert(dashboard_data_start() == ESP_OK && creates == 4);
     assert(dashboard_data_start() == ESP_ERR_INVALID_STATE && creates == 4);
-    char storage[256];
+    char storage[1024];
     http_body_t body = { .text=storage, .capacity=sizeof(storage) };
+    dashboard_energy_catalog_t *catalog=calloc(1,sizeof(*catalog));
+    dashboard_data_state_t catalog_state;
+    uint32_t catalog_generation=dashboard_data_energy_catalog_request(DASH_ENERGY_AREAS,NULL,NULL);
+    assert(catalog_generation);
+    mode=21;update_energy_catalog("fake",&body);
+    assert(!dashboard_data_energy_catalog_copy(catalog_generation,catalog,&catalog_state));
+    assert(dashboard_data_energy_catalog_copy(energy_catalog.generation,catalog,&catalog_state) && catalog_state==DASH_DATA_WAITING);
+    mode=20;update_energy_catalog("fake",&body);
+    assert(dashboard_data_energy_catalog_copy(energy_catalog.generation,catalog,&catalog_state) && catalog_state==DASH_DATA_FRESH);
+    assert(catalog->count==1 && !strcmp(catalog->entries[0].id,"kyiv"));
+    mode=22;response_status=429;
+    assert(dashboard_data_energy_catalog_request(DASH_ENERGY_AREAS,NULL,NULL));
+    update_energy_catalog("fake",&body);
+    assert(retry_not_before[SOURCE_ENERGY]==clock_us+SECONDS_US(120));
+    assert(dashboard_data_energy_catalog_copy(energy_catalog.generation,catalog,&catalog_state) && catalog_state==DASH_DATA_WAITING);
+    response_status=200;retry_not_before[SOURCE_ENERGY]=0;
+    const int statuses[]={401,403,429,503};
+    for(unsigned i=0;i<4;++i) {
+        mode=20;response_status=statuses[i];retry_not_before[SOURCE_ENERGY]=0;
+        assert(dashboard_data_energy_catalog_request(DASH_ENERGY_AREAS,NULL,NULL));
+        update_energy_catalog("fake",&body);
+        assert(dashboard_data_energy_catalog_copy(energy_catalog.generation,catalog,&catalog_state));
+        assert(catalog_state==(i<2 ? DASH_DATA_AUTH_ERROR : DASH_DATA_UNAVAILABLE));
+        if(i<2) assert(retry_not_before[SOURCE_ENERGY]==clock_us+SECONDS_US(900));
+        if(i==2) assert(retry_not_before[SOURCE_ENERGY]==clock_us+SECONDS_US(120));
+    }
+    response_status=200;retry_not_before[SOURCE_ENERGY]=0;
+    dashboard_data_energy_catalog_cancel();
+    assert(!energy_catalog.data && !energy_catalog.pending);
+    free(catalog);
+    dashboard_energy_selection_t original=latest.energy_selection;
+    for(int m=10;m<=11;++m) {
+        assert(dashboard_data_select_energy(&original)==ESP_OK);
+        mode=m; update_energy("fake",&body);
+        assert(!latest.energy_updated_us && latest.energy_state==DASH_DATA_WAITING);
+    }
+    assert(dashboard_data_select_energy(&original)==ESP_OK);
+    mode=12; update_energy("fake",&body);
+    assert(latest.energy_updated_us && latest.energy_state==DASH_DATA_FRESH);
+    dashboard_energy_selection_t changed=original; strcpy(changed.queue,"1.1");
+    fail_city_save=true;
+    uint32_t saved_generation=latest.energy_generation;
+    assert(dashboard_data_select_energy(&changed)!=ESP_OK);
+    assert(latest.energy_generation==saved_generation && !strcmp(latest.energy_selection.queue,"5.2"));
+    fail_city_save=false;
+    mode=13; response_status=429; update_energy("fake",&body);
+    assert(!latest.energy_updated_us && retry_not_before[SOURCE_ENERGY]==clock_us+SECONDS_US(120));
+    response_status=200; retry_not_before[SOURCE_ENERGY]=0;
+    assert(dashboard_data_select_energy(&original)==ESP_OK);
+    const uint32_t energy_generation=latest.energy_generation;
     /* Completion after A->B and A->B->A must never publish the old request. */
     for(int m=4;m<=5;++m) {
         assert(dashboard_data_select_location(dashboard_city_default())==ESP_OK);
@@ -240,6 +312,7 @@ int main(void)
         assert(!latest.alert_details_updated_us && !conditional_headers);
     }
     assert(dashboard_data_select_location(dashboard_city_default())==ESP_OK);
+    assert(latest.energy_generation==energy_generation);
     mode=4; response_status=500;
     update_weather(&body);
     assert(retry_not_before[SOURCE_WEATHER]>=clock_us+SECONDS_US(60));
@@ -561,7 +634,7 @@ int main(void) {
             fixture.write_text(FIXTURE, encoding="utf-8")
             cjson = ROOT / "managed_components/espressif__cjson/cJSON"
             sources = [fixture, ROOT / "main/dashboard_recovery.c", ROOT / "main/dashboard_location.c",
-                       ROOT / "main/dashboard_data_parse.c", ROOT / "main/dashboard_energy_parse.c",
+                       ROOT / "main/dashboard_data_parse.c", ROOT / "main/dashboard_energy_parse.c", ROOT / "main/dashboard_energy.c",
                        ROOT / "main/dashboard_alert_details.c", cjson / "cJSON.c"]
             command = ["cl", "/nologo", "/std:c11", "/utf-8", "/D_CRT_SECURE_NO_WARNINGS",
                        "/I" + str(path), "/I" + str(ROOT / "main"), "/I" + str(cjson),

@@ -58,6 +58,14 @@ static startup_state_t startup_state;
 static bool data_started;
 /* Worker-owned service backoff survives a recovery cycle. */
 static int64_t retry_not_before[4];
+static struct {
+    uint32_t generation;
+    bool pending;
+    dashboard_energy_catalog_kind_t kind;
+    char area[DASH_ENERGY_ID_SIZE], initiator[DASH_ENERGY_ID_SIZE];
+    dashboard_data_state_t state;
+    dashboard_energy_catalog_t *data;
+} energy_catalog;
 static dashboard_data_snapshot_t latest = {
     .weather_state = DASH_DATA_WAITING,
     .alerts_state = DASH_DATA_NO_TOKEN,
@@ -408,13 +416,24 @@ static int64_t update_alert_details(const char *authorization, http_body_t *body
 
 static int64_t update_energy(const char *authorization, http_body_t *body)
 {
+    dashboard_data_snapshot_t selection;
+    dashboard_data_snapshot(&selection);
+    char url[256];
+    snprintf(url,sizeof(url),"https://alerts.energy/api/v1/source-registry/areas/%s/shutdowns",selection.energy_selection.area);
+    body->url=url;
     const int status = fetch_json(SOURCE_ENERGY, authorization, body);
+    body->url=NULL;
     if (body->cancelled) return esp_timer_get_time();
     dashboard_energy_schedule_t next;
-    const bool success = status == 200 && dashboard_parse_energy(body->text, body->length, &next);
+    const bool success = status == 200 && dashboard_parse_energy_selected(body->text, body->length,
+        selection.energy_selection.initiator,selection.energy_selection.queue,&next);
     const int64_t now = esp_timer_get_time();
 
     portENTER_CRITICAL(&data_lock);
+    if(selection.energy_generation!=latest.energy_generation) {
+        portEXIT_CRITICAL(&data_lock);
+        return now;
+    }
     latest.energy_state = success ? DASH_DATA_FRESH
                                   : status == 401 || status == 403 ? DASH_DATA_AUTH_ERROR
                                                                    : DASH_DATA_UNAVAILABLE;
@@ -425,7 +444,8 @@ static int64_t update_energy(const char *authorization, http_body_t *body)
     portEXIT_CRITICAL(&data_lock);
 
     if (success) {
-        ESP_LOGI(tag, "Alerts.energy schedule updated for CEK 5.2");
+        ESP_LOGI(tag, "Alerts.energy schedule updated for %s / %s / %s",
+            selection.energy_selection.area,selection.energy_selection.initiator,selection.energy_selection.queue);
         return now + SECONDS_US(300);
     }
     ESP_LOGW(tag, "Alerts.energy update failed (HTTP %d)", status);
@@ -433,6 +453,91 @@ static int64_t update_energy(const char *authorization, http_body_t *body)
         return now + SECONDS_US(body->retry_after > 0 ? body->retry_after : 300);
     }
     return now + SECONDS_US(status == 401 || status == 403 ? 900 : 120);
+}
+
+uint32_t dashboard_data_energy_catalog_request(dashboard_energy_catalog_kind_t kind,
+                                              const char *area,const char *initiator)
+{
+    if(kind>DASH_ENERGY_QUEUES || (kind!=DASH_ENERGY_AREAS && !dashboard_energy_id_valid(area,DASH_ENERGY_ID_SIZE,false)) ||
+       (kind==DASH_ENERGY_QUEUES && !dashboard_energy_id_valid(initiator,DASH_ENERGY_ID_SIZE,false))) return 0;
+    /* UI is the sole requester; publication and detachment remain under data_lock. */
+    if(!energy_catalog.data) {
+        dashboard_energy_catalog_t *allocated=heap_caps_malloc(sizeof(*allocated),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+        if(!allocated) return 0;
+        memset(allocated,0,sizeof(*allocated));
+        portENTER_CRITICAL(&data_lock);
+        energy_catalog.data=allocated;
+        portEXIT_CRITICAL(&data_lock);
+    }
+    portENTER_CRITICAL(&data_lock);
+    if(!++energy_catalog.generation) ++energy_catalog.generation;
+    const uint32_t generation=energy_catalog.generation;
+    energy_catalog.kind=kind;
+    snprintf(energy_catalog.area,sizeof(energy_catalog.area),"%s",area ? area : "");
+    snprintf(energy_catalog.initiator,sizeof(energy_catalog.initiator),"%s",initiator ? initiator : "");
+    energy_catalog.pending=true;
+    energy_catalog.data->count=0;
+    energy_catalog.state=workers[WORKER_ENERGY].has_key ? DASH_DATA_WAITING : DASH_DATA_NO_TOKEN;
+    portEXIT_CRITICAL(&data_lock);
+    return generation;
+}
+
+bool dashboard_data_energy_catalog_copy(uint32_t generation,dashboard_energy_catalog_t *out,
+                                       dashboard_data_state_t *state)
+{
+    portENTER_CRITICAL(&data_lock);
+    const bool matching=generation && generation==energy_catalog.generation && energy_catalog.data;
+    if(matching) {
+        *state=energy_catalog.state;
+        if(out && *state==DASH_DATA_FRESH) *out=*energy_catalog.data;
+    }
+    portEXIT_CRITICAL(&data_lock);
+    return matching;
+}
+
+void dashboard_data_energy_catalog_cancel(void)
+{
+    portENTER_CRITICAL(&data_lock);
+    dashboard_energy_catalog_t *discard=energy_catalog.data;
+    energy_catalog.data=NULL;
+    energy_catalog.pending=false;
+    ++energy_catalog.generation;
+    portEXIT_CRITICAL(&data_lock);
+    free(discard);
+}
+
+static void update_energy_catalog(const char *authorization,http_body_t *body)
+{
+    char area[DASH_ENERGY_ID_SIZE],initiator[DASH_ENERGY_ID_SIZE],url[256];
+    portENTER_CRITICAL(&data_lock);
+    const bool pending=energy_catalog.pending;
+    const uint32_t generation=energy_catalog.generation;
+    const dashboard_energy_catalog_kind_t kind=energy_catalog.kind;
+    memcpy(area,energy_catalog.area,sizeof(area));
+    memcpy(initiator,energy_catalog.initiator,sizeof(initiator));
+    portEXIT_CRITICAL(&data_lock);
+    if(!pending) return;
+    if(kind==DASH_ENERGY_AREAS) snprintf(url,sizeof(url),"https://alerts.energy/api/v1/source-registry/areas/overview");
+    else snprintf(url,sizeof(url),"https://alerts.energy/api/v1/source-registry/areas/%s/%s",area,
+        kind==DASH_ENERGY_SUPPLIERS ? "suppliers" : "shutdowns");
+    dashboard_energy_catalog_t *parsed=heap_caps_malloc(sizeof(*parsed),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+    if(parsed) memset(parsed,0,sizeof(*parsed));
+    int status=0;
+    bool valid=false;
+    if(parsed) {
+        body->url=url;
+        status=fetch_json(SOURCE_ENERGY,authorization,body);
+        body->url=NULL;
+        valid=status==200 && dashboard_energy_catalog_parse(body->text,body->length,kind,initiator,parsed);
+    }
+    portENTER_CRITICAL(&data_lock);
+    if(generation==energy_catalog.generation && energy_catalog.data && !body->cancelled) {
+        energy_catalog.pending=false;
+        energy_catalog.state=valid ? DASH_DATA_FRESH : status==401 || status==403 ? DASH_DATA_AUTH_ERROR : DASH_DATA_UNAVAILABLE;
+        if(valid) *energy_catalog.data=*parsed;
+    }
+    portEXIT_CRITICAL(&data_lock);
+    free(parsed);
 }
 
 static void reset_worker_bodies(const data_worker_t *worker, http_body_t *body,
@@ -479,6 +584,7 @@ static void data_task(void *argument)
     int64_t next_primary = 0, next_details = 0;
     bool online_last = false;
     uint32_t location_seen=UINT32_MAX;
+    uint32_t energy_seen=UINT32_MAX;
     ESP_LOGI(tag, "%s ready", worker->name);
     while (true) {
         data_heartbeat(worker->id);
@@ -503,7 +609,12 @@ static void data_task(void *argument)
         }
         portENTER_CRITICAL(&data_lock);
         const uint32_t location_now=latest.location_generation;
+        const uint32_t energy_now=latest.energy_generation;
         portEXIT_CRITICAL(&data_lock);
+        if(worker->id==WORKER_ENERGY && energy_seen!=energy_now) {
+            energy_seen=energy_now;
+            next_primary=0;
+        }
         if (location_seen!=location_now) {
             location_seen=location_now;
             if(worker->id==WORKER_WEATHER) next_primary=0;
@@ -520,6 +631,9 @@ static void data_task(void *argument)
                 next_primary = now;
         }
         if (online && worker->has_key && time(NULL) >= 1700000000) {
+            if(worker->id==WORKER_ENERGY && body.text && !recovery_pending(SOURCE_ENERGY) &&
+               esp_timer_get_time()>=retry_not_before[SOURCE_ENERGY])
+                update_energy_catalog(worker->authorization,&body);
             if (!recovery_pending(worker->primary) && body.text && now >= next_primary &&
                 now >= retry_not_before[worker->primary]) {
                 switch (worker->id) {
@@ -626,6 +740,23 @@ esp_err_t dashboard_data_select_location(const dashboard_city_t *city)
     return ESP_OK;
 }
 
+esp_err_t dashboard_data_select_energy(const dashboard_energy_selection_t *selection)
+{
+    if(!dashboard_energy_selection_valid(selection)) return ESP_ERR_INVALID_ARG;
+    /* Sole caller is the UI task; storage runs outside the publication lock. */
+    const esp_err_t result=dashboard_energy_save(selection);
+    if(result!=ESP_OK) return result;
+    portENTER_CRITICAL(&data_lock);
+    latest.energy_selection=*selection;
+    latest.energy_configured=true;
+    ++latest.energy_generation;
+    memset(&latest.energy,0,sizeof(latest.energy));
+    latest.energy_updated_us=0;
+    latest.energy_state=workers[WORKER_ENERGY].has_key ? DASH_DATA_WAITING : DASH_DATA_NO_TOKEN;
+    portEXIT_CRITICAL(&data_lock);
+    return ESP_OK;
+}
+
 esp_err_t dashboard_data_start(void)
 {
     portENTER_CRITICAL(&data_lock);
@@ -640,6 +771,7 @@ esp_err_t dashboard_data_start(void)
     portEXIT_CRITICAL(&data_lock);
 
     latest.location=dashboard_location_load();
+    latest.energy_configured=dashboard_energy_load(&latest.energy_selection);
     /* Read each service key once, before releasing any task from the barrier. */
     workers[WORKER_ALERTS].has_key = read_bearer("dash_keys", "alerts_token",
                                                 workers[WORKER_ALERTS].authorization);

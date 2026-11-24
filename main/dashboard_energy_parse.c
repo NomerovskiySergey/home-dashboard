@@ -111,8 +111,10 @@ static const char *object_end(const char *cursor, const char *end)
     return NULL;
 }
 
-bool dashboard_parse_energy(const char *body, size_t length, dashboard_energy_schedule_t *out)
+bool dashboard_parse_energy_selected(const char *body, size_t length, const char *initiator,
+                                    const char *queue, dashboard_energy_schedule_t *out)
 {
+    if(!body || !initiator || !queue || !out) return false;
     const char *const end = body + length;
     const char *cursor = skip_space(body, end);
     if (cursor == end || *cursor++ != '[') {
@@ -137,8 +139,8 @@ bool dashboard_parse_energy(const char *body, size_t length, dashboard_energy_sc
             return false;
         }
         const bool match =
-            is_text(cJSON_GetObjectItemCaseSensitive(item, "initiator"), "dnipropetrovska_oblast_cek") &&
-            is_text(cJSON_GetObjectItemCaseSensitive(item, "queue"), "5.2");
+            is_text(cJSON_GetObjectItemCaseSensitive(item, "initiator"), initiator) &&
+            is_text(cJSON_GetObjectItemCaseSensitive(item, "queue"), queue);
         if (match) {
             if (found ||
                 !parse_day(item, "today_date", "today_status", "today", "today_possible", &parsed.today) ||
@@ -167,4 +169,9 @@ bool dashboard_parse_energy(const char *body, size_t length, dashboard_energy_sc
             return false;
         }
     }
+}
+
+bool dashboard_parse_energy(const char *body,size_t length,dashboard_energy_schedule_t *out)
+{
+    return dashboard_parse_energy_selected(body,length,"dnipropetrovska_oblast_cek","5.2",out);
 }

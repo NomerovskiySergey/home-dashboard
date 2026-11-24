@@ -8,6 +8,7 @@
 #include "dashboard_alert_details.h"
 #include "dashboard_recovery.h"
 #include "dashboard_location.h"
+#include "dashboard_energy.h"
 
 typedef enum {
     DASH_DATA_WAITING,
@@ -32,11 +33,21 @@ typedef struct {
     dashboard_data_state_t energy_state;
     int64_t energy_updated_us;
     dashboard_energy_schedule_t energy;
+    dashboard_energy_selection_t energy_selection;
+    uint32_t energy_generation;
+    bool energy_configured;
 } dashboard_data_snapshot_t;
 
 esp_err_t dashboard_data_start(void);
 /* Called by the UI task; persist before publishing the new selection. */
 esp_err_t dashboard_data_select_location(const dashboard_city_t *city);
+esp_err_t dashboard_data_select_energy(const dashboard_energy_selection_t *selection);
+/* UI requests; only the energy worker performs HTTPS. 0 means invalid/OOM. */
+uint32_t dashboard_data_energy_catalog_request(dashboard_energy_catalog_kind_t kind,
+                                              const char *area,const char *initiator);
+bool dashboard_data_energy_catalog_copy(uint32_t generation,dashboard_energy_catalog_t *out,
+                                       dashboard_data_state_t *state);
+void dashboard_data_energy_catalog_cancel(void);
 /* Nonblocking request to all three service workers; each owns its cleanup. */
 bool dashboard_data_restart(void);
 void dashboard_data_recovery(dashboard_recovery_t *out);

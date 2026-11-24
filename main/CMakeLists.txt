@@ -6,6 +6,7 @@ idf_component_register(
 
 target_sources(${COMPONENT_LIB} PRIVATE "dashboard_pipboy.c")
 target_sources(${COMPONENT_LIB} PRIVATE "dashboard_recovery.c")
+target_sources(${COMPONENT_LIB} PRIVATE "dashboard_energy.c")
 
 idf_component_get_property(lvgl_dir lvgl__lvgl COMPONENT_DIR)
 target_add_binary_data(${COMPONENT_LIB}
