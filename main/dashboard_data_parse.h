@@ -32,3 +32,5 @@ bool dashboard_parse_alerts(const char *body, size_t length,
                             char out[DASHBOARD_REGION_COUNT]);
 
 bool dashboard_parse_energy(const char *body, size_t length, dashboard_energy_schedule_t *out);
+bool dashboard_parse_energy_selected(const char *body, size_t length, const char *initiator,
+                                     const char *queue, dashboard_energy_schedule_t *out);

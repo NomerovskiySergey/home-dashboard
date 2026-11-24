@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -76,6 +77,13 @@ static lv_obj_t *city_rows[8], *city_extent;
 static const dashboard_region_t *city_region;
 static unsigned city_count;
 static bool city_rows_updating;
+static lv_obj_t *energy_settings_screen,*energy_settings_list,*energy_settings_heading,*energy_settings_note;
+static lv_obj_t *energy_settings_context,*energy_settings_retry,*energy_rows[8];
+static bool energy_rows_updating;
+static dashboard_energy_catalog_t *energy_ui_catalog;
+static dashboard_energy_selection_t energy_draft;
+static dashboard_energy_catalog_kind_t energy_stage;
+static uint32_t energy_request,energy_loaded;
 static uint32_t selected_generation=UINT32_MAX;
 static lv_obj_t *theme_screen;
 static lv_obj_t *theme_name;
@@ -133,6 +141,9 @@ static void open_map(lv_event_t *event);
 static void update_remote_data(lv_timer_t *timer);
 static void update_system(lv_timer_t *timer);
 static void prepare_location_list(void);
+static void open_energy_settings(lv_event_t *event);
+static void update_energy_settings(lv_timer_t *timer);
+static void set_label_if_changed(lv_obj_t *object,const char *text);
 
 static void apply_theme_styles(const dashboard_palette_t *next)
 {
@@ -704,7 +715,7 @@ static void change_schedule_day(lv_event_t *event)
 
 static void add_schedule_screen(void)
 {
-    label(schedule_screen, "Відключення ЦЕК 5.2", title_font, DASH_COLOR_TEXT, 16, 15);
+    label(schedule_screen, "Відключення", title_font, DASH_COLOR_TEXT, 16, 15);
     energy_detail_date = label(schedule_screen, "", body_font, DASH_COLOR_MUTED, 16, 53);
     button(schedule_screen, "Назад", 370, 14, 94, show_screen, home_screen);
     button(schedule_screen, "Сьогодні", 16, 81, 105, change_schedule_day, NULL);
@@ -721,11 +732,18 @@ static void add_schedule_screen(void)
     energy_intervals = surface(schedule_screen, 16, 262, CARD_WIDTH, 167, DASH_COLOR_PANEL, 12);
     lv_obj_set_scrollable(energy_intervals, true);
     lv_obj_set_scroll_dir(energy_intervals, LV_DIR_VER);
-    energy_detail_age = label(schedule_screen, "Alerts.energy", small_font, DASH_COLOR_MUTED, 16, 446);
+    energy_detail_age = label(schedule_screen, "Alerts.energy", small_font, DASH_COLOR_MUTED, 16, 436);
+    lv_obj_set_size(energy_detail_age,448,42);
+    lv_label_set_long_mode(energy_detail_age,LV_LABEL_LONG_DOT);
 }
 
 static void update_energy_cards(const dashboard_data_snapshot_t *data)
 {
+    const char *supplier=data->energy_selection.supplier_name;
+    const char *short_name=strstr(supplier,"ДТЕК") ? "ДТЕК" : strstr(supplier,"ЦЕК") ? "ЦЕК" : supplier;
+    char heading[160];
+    snprintf(heading,sizeof(heading),"%s %s",short_name,data->energy_selection.queue);
+    set_label_if_changed(home.power_heading,heading);
     struct tm local;
     const time_t current = kyiv_clock(&local);
     const int minutes = current ? local.tm_hour * 60 + local.tm_min : -1;
@@ -733,14 +751,17 @@ static void update_energy_cards(const dashboard_data_snapshot_t *data)
     static int64_t displayed_revision = -1;
     static int displayed_state = -1;
     static bool displayed_tomorrow;
+    static uint32_t displayed_generation=UINT32_MAX;
     if (displayed_minute == current / 60 && displayed_revision == data->energy_updated_us &&
-        displayed_state == (int)data->energy_state && displayed_tomorrow == energy_show_tomorrow) {
+        displayed_state == (int)data->energy_state && displayed_tomorrow == energy_show_tomorrow &&
+        displayed_generation==data->energy_generation) {
         return;
     }
     displayed_minute = current / 60;
     displayed_revision = data->energy_updated_us;
     displayed_state = data->energy_state;
     displayed_tomorrow = energy_show_tomorrow;
+    displayed_generation=data->energy_generation;
 
     char date[11] = {0};
     if (current) {
@@ -768,8 +789,10 @@ static void update_energy_cards(const dashboard_data_snapshot_t *data)
     render_intervals(detail);
     if (data->energy_updated_us) {
         const long long age = (esp_timer_get_time() - data->energy_updated_us) / 60000000;
-        lv_label_set_text_fmt(energy_detail_age, "Alerts.energy · оновлено %lld хв тому", age);
-    }
+        lv_label_set_text_fmt(energy_detail_age, "%s · %s %s\nAlerts.energy · оновлено %lld хв тому",
+            data->energy_selection.area_name,short_name,data->energy_selection.queue,age);
+    } else lv_label_set_text_fmt(energy_detail_age,"%s · %s %s\nAlerts.energy · очікуємо оновлення",
+        data->energy_selection.area_name,short_name,data->energy_selection.queue);
 }
 
 static void request_setup(lv_event_t *event)
@@ -827,6 +850,8 @@ static void add_settings_screen(void)
     lv_obj_t *location = button(settings_screen, "Локація", 16, 326, CARD_WIDTH,
                                show_screen, location_screen);
     lv_obj_set_height(location, 64);
+    lv_obj_t *energy=button(settings_screen,"Відключення",16,406,CARD_WIDTH,open_energy_settings,NULL);
+    lv_obj_set_height(energy,56);
 }
 
 static void select_city(lv_event_t *event)
@@ -992,7 +1017,176 @@ static void add_location_screens(void)
     lv_obj_add_event_cb(city_list,refresh_city_rows,LV_EVENT_SCROLL,NULL);
     location_error=label(city_screen,"",small_font,DASH_COLOR_ALARM,16,426);
     lv_obj_set_width(location_error,440);
-    label(location_screen,"Погода й тривоги · графік ЦЕК окремо",small_font,DASH_COLOR_MUTED,16,456);
+    label(location_screen,"Погода й тривоги · відключення окремо",small_font,DASH_COLOR_MUTED,16,456);
+}
+
+/* Energy selection wizard: intermediate choices never publish the active schedule. */
+static void select_energy_row(lv_event_t *event);
+
+static void refresh_energy_rows(lv_event_t *event)
+{
+    if(energy_rows_updating || !energy_ui_catalog || !energy_loaded) return;
+    energy_rows_updating=true;
+    int first=lv_obj_get_scroll_y(energy_settings_list)/58;
+    if(first<0) first=0;
+    for(unsigned i=0;i<8;++i) {
+        lv_obj_t *row=energy_rows[i];
+        if(!row) continue;
+        const unsigned index=(unsigned)first+i;
+        dashboard_energy_entry_t *entry=index<energy_ui_catalog->count ? &energy_ui_catalog->entries[index] : NULL;
+        lv_obj_set_user_data(row,entry);
+        lv_obj_set_hidden(row,!entry);
+        if(!entry) continue;
+        lv_obj_set_y(row,(first+(int)i)*58);
+        lv_label_set_text(lv_obj_get_child(row,0),entry->name);
+    }
+    energy_rows_updating=false;
+}
+
+static void request_energy_stage(void)
+{
+    energy_loaded=0;
+    /* No deletion inside a row's touch callback; the UI timer replaces old rows. */
+    for(unsigned i=0;i<8;++i) if(energy_rows[i]) {
+        lv_obj_set_user_data(energy_rows[i],NULL);
+        lv_obj_set_hidden(energy_rows[i],true);
+    }
+    const char *title=energy_stage==DASH_ENERGY_AREAS ? "Область" : energy_stage==DASH_ENERGY_SUPPLIERS ? "Оператор" : "Черга";
+    lv_label_set_text(energy_settings_heading,title);
+    char context[288];
+    if(energy_stage==DASH_ENERGY_AREAS) snprintf(context,sizeof(context),"Зараз: %s · %s · %s",
+        energy_draft.area_name,energy_draft.supplier_name,energy_draft.queue);
+    else if(energy_stage==DASH_ENERGY_SUPPLIERS) snprintf(context,sizeof(context),"%s",energy_draft.area_name);
+    else snprintf(context,sizeof(context),"%s · %s",energy_draft.area_name,energy_draft.supplier_name);
+    lv_label_set_text(energy_settings_context,context);
+    if(!energy_ui_catalog) energy_ui_catalog=calloc(1,sizeof(*energy_ui_catalog));
+    if(!energy_ui_catalog) {
+        energy_request=0;
+        lv_label_set_text(energy_settings_note,"Недостатньо пам’яті. Спробуйте ще раз.");
+        lv_obj_set_hidden(energy_settings_retry,false);
+        return;
+    }
+    energy_request=dashboard_data_energy_catalog_request(energy_stage,energy_draft.area,energy_draft.initiator);
+    lv_label_set_text(energy_settings_note,energy_request ? "Завантаження…" : "Недостатньо пам’яті. Спробуйте ще раз.");
+    lv_obj_set_hidden(energy_settings_retry,true);
+}
+
+static void energy_back(lv_event_t *event)
+{
+    if(energy_stage==DASH_ENERGY_AREAS) lv_screen_load(settings_screen);
+    else { --energy_stage; request_energy_stage(); }
+}
+
+static void retry_energy_catalog(lv_event_t *event) { request_energy_stage(); }
+
+static void select_energy_row(lv_event_t *event)
+{
+    const dashboard_energy_entry_t *entry=lv_obj_get_user_data(lv_event_get_target_obj(event));
+    if(!entry || !energy_loaded) return;
+    if(energy_stage==DASH_ENERGY_AREAS) {
+        snprintf(energy_draft.area,sizeof(energy_draft.area),"%s",entry->id);
+        snprintf(energy_draft.area_name,sizeof(energy_draft.area_name),"%s",entry->name);
+        energy_stage=DASH_ENERGY_SUPPLIERS;
+        request_energy_stage();
+    } else if(energy_stage==DASH_ENERGY_SUPPLIERS) {
+        snprintf(energy_draft.initiator,sizeof(energy_draft.initiator),"%s",entry->id);
+        snprintf(energy_draft.supplier_name,sizeof(energy_draft.supplier_name),"%s",entry->name);
+        energy_stage=DASH_ENERGY_QUEUES;
+        request_energy_stage();
+    } else {
+        const size_t queue_length=strlen(entry->id);
+        if(queue_length>=sizeof(energy_draft.queue)) return;
+        memcpy(energy_draft.queue,entry->id,queue_length+1);
+        if(dashboard_data_select_energy(&energy_draft)!=ESP_OK) {
+            lv_label_set_text(energy_settings_note,"Не вдалося зберегти. Спробуйте ще раз.");
+            return;
+        }
+        lv_screen_load(home_screen);
+        update_remote_data(NULL);
+    }
+}
+
+static void update_energy_settings(lv_timer_t *timer)
+{
+    if(lv_screen_active()!=energy_settings_screen) {
+        if(energy_ui_catalog) {
+            energy_rows_updating=true;
+            lv_obj_clean(energy_settings_list);
+            memset(energy_rows,0,sizeof(energy_rows));
+            free(energy_ui_catalog); energy_ui_catalog=NULL;
+            energy_loaded=energy_request=0;
+            dashboard_data_energy_catalog_cancel();
+            energy_rows_updating=false;
+        }
+        return;
+    }
+    dashboard_data_state_t state=DASH_DATA_UNAVAILABLE;
+    if(!energy_request || !dashboard_data_energy_catalog_copy(energy_request,NULL,&state)) {
+        lv_obj_set_hidden(energy_settings_retry,false);
+        return;
+    }
+    if(state!=DASH_DATA_FRESH) {
+        lv_label_set_text(energy_settings_note,state==DASH_DATA_WAITING ? "Завантаження · очікуємо зв’язку або повтору" :
+            state==DASH_DATA_NO_TOKEN ? "Потрібен ключ Alerts.energy" :
+            state==DASH_DATA_AUTH_ERROR ? "Перевірте ключ і доступ API за підпискою" : "Не вдалося отримати список");
+        lv_obj_set_hidden(energy_settings_retry,state==DASH_DATA_WAITING);
+        return;
+    }
+    if(energy_loaded==energy_request) return;
+    if(!dashboard_data_energy_catalog_copy(energy_request,energy_ui_catalog,&state) || state!=DASH_DATA_FRESH) return;
+    energy_rows_updating=true;
+    lv_obj_clean(energy_settings_list);
+    memset(energy_rows,0,sizeof(energy_rows));
+    const unsigned count=energy_ui_catalog->count;
+    surface(energy_settings_list,0,0,1,(int)count*58,DASH_COLOR_BACKGROUND,0);
+    for(unsigned i=0;i<8 && i<count;++i) {
+        energy_rows[i]=button(energy_settings_list,"",0,(int)i*58,430,select_energy_row,NULL);
+        lv_obj_set_height(energy_rows[i],50);
+        lv_obj_t *name=lv_obj_get_child(energy_rows[i],0);
+        lv_obj_set_width(name,398);
+        lv_obj_set_height(name,lv_font_get_line_height(body_font));
+        lv_label_set_long_mode(name,LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+    }
+    int first=0;
+    if(energy_stage==DASH_ENERGY_AREAS) {
+        dashboard_data_snapshot_t data;
+        dashboard_data_snapshot(&data);
+        if(!data.energy_configured && selected_city) {
+            const int hint=dashboard_energy_area_hint(energy_ui_catalog,selected_city->id);
+            if(hint>=0) first=hint;
+        } else for(unsigned i=0;i<count;++i)
+            if(!strcmp(energy_ui_catalog->entries[i].id,data.energy_selection.area)) first=(int)i;
+    }
+    lv_obj_scroll_to_y(energy_settings_list,first*58,LV_ANIM_OFF);
+    energy_loaded=energy_request;
+    energy_rows_updating=false;
+    refresh_energy_rows(NULL);
+    lv_label_set_text(energy_settings_note,count ? "Оберіть зі списку" : "Для цього вибору список поки порожній");
+    lv_obj_set_hidden(energy_settings_retry,false);
+}
+
+static void open_energy_settings(lv_event_t *event)
+{
+    dashboard_data_snapshot_t data;
+    dashboard_data_snapshot(&data);
+    energy_draft=data.energy_selection;
+    energy_stage=DASH_ENERGY_AREAS;
+    request_energy_stage();
+    lv_screen_load(energy_settings_screen);
+}
+
+static void add_energy_settings_screen(void)
+{
+    energy_settings_heading=label(energy_settings_screen,"Область",title_font,DASH_COLOR_TEXT,16,15);
+    button(energy_settings_screen,"Назад",370,14,94,energy_back,NULL);
+    energy_settings_context=label(energy_settings_screen,"",small_font,DASH_COLOR_MUTED,16,56);
+    lv_obj_set_size(energy_settings_context,448,44);
+    lv_label_set_long_mode(energy_settings_context,LV_LABEL_LONG_DOT);
+    energy_settings_list=location_scroller(energy_settings_screen,110,292);
+    lv_obj_add_event_cb(energy_settings_list,refresh_energy_rows,LV_EVENT_SCROLL,NULL);
+    energy_settings_note=label(energy_settings_screen,"",small_font,DASH_COLOR_MUTED,16,416);
+    lv_obj_set_size(energy_settings_note,320,52);
+    energy_settings_retry=button(energy_settings_screen,"Оновити",350,420,114,retry_energy_catalog,NULL);
 }
 
 static const char *source_state(dashboard_data_state_t state)
@@ -1019,7 +1213,9 @@ static void update_system(lv_timer_t *timer)
                               data.alert_details_updated_us, data.energy_updated_us };
     const dashboard_data_state_t states[] = { data.weather_state, data.alerts_state,
                                              data.alert_details_state, data.energy_state };
-    static const char *const names[] = { "Погода", "Карта тривог", "Типи загроз", "ЦЕК 5.2" };
+    char energy_name[160];
+    snprintf(energy_name,sizeof(energy_name),"%s %s",data.energy_selection.supplier_name,data.energy_selection.queue);
+    const char *const names[] = { "Погода", "Карта тривог", "Типи загроз", energy_name };
     for (int i = 0; i < 4; ++i) {
         char age[64];
         const long long seconds = updated[i] && now >= updated[i] ? (now - updated[i]) / 1000000 : 0;
@@ -1654,6 +1850,7 @@ esp_err_t dashboard_screen_create(lv_indev_t *touch, esp_err_t (*set_backlight)(
     selected_city=initial.location ? initial.location : dashboard_city_default();
     location_screen=create_screen();
     city_screen=create_screen();
+    energy_settings_screen=create_screen();
     home_screen = create_screen();
     settings_screen = create_screen();
     system_screen = create_screen();
@@ -1724,6 +1921,9 @@ esp_err_t dashboard_screen_create(lv_indev_t *touch, esp_err_t (*set_backlight)(
     lv_obj_add_event_cb(power, show_screen, LV_EVENT_CLICKED, schedule_screen);
     home.power_card = power;
     home.power_heading = label(power, "ЦЕК 5.2", body_font, DASH_COLOR_TEXT, 12, 4);
+    lv_obj_set_width(home.power_heading,208);
+    lv_obj_set_height(home.power_heading,lv_font_get_line_height(body_font));
+    lv_label_set_long_mode(home.power_heading,LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
     energy_home_note = label(power, "Оновлення…", small_font, DASH_COLOR_WARNING, 230, 6);
     energy_home_track = make_outage_track(power, 12, 29, CARD_WIDTH - 24);
 
@@ -1731,6 +1931,7 @@ esp_err_t dashboard_screen_create(lv_indev_t *touch, esp_err_t (*set_backlight)(
     add_map_screen();
     add_wifi_screen();
     add_location_screens();
+    add_energy_settings_screen();
     add_settings_screen();
     add_system_screen();
     add_display_settings_screen();
@@ -1746,5 +1947,6 @@ esp_err_t dashboard_screen_create(lv_indev_t *touch, esp_err_t (*set_backlight)(
     lv_timer_create(update_wifi_connection, 2000, NULL);
     lv_timer_create(update_remote_data, 1000, NULL);
     lv_timer_create(update_system, 1000, NULL);
+    lv_timer_create(update_energy_settings,500,NULL);
     return ESP_OK;
 }

@@ -246,7 +246,7 @@ class Workers(unittest.TestCase):
             (path / "fixture.c").write_text(FIXTURE, encoding="utf-8")
             cjson = ROOT / "managed_components/espressif__cjson/cJSON"
             sources = [path / "fixture.c", ROOT / "main/dashboard_recovery.c", ROOT / "main/dashboard_location.c",
-                       ROOT / "main/dashboard_data_parse.c", ROOT / "main/dashboard_energy_parse.c",
+                       ROOT / "main/dashboard_data_parse.c", ROOT / "main/dashboard_energy_parse.c", ROOT / "main/dashboard_energy.c",
                        ROOT / "main/dashboard_alert_details.c", cjson / "cJSON.c"]
             executable = path / "workers.exe"
             result = subprocess.run(["cl", "/nologo", "/std:c11", "/utf-8", "/D_CRT_SECURE_NO_WARNINGS",
