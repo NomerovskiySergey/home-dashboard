@@ -1,4 +1,5 @@
 #include "dashboard_energy.h"
+#include "dashboard_json.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -116,16 +117,8 @@ bool dashboard_energy_catalog_parse(const char *body,size_t length,dashboard_ene
     for(;;) {
         if(p==end || *p!='{') return false;
         const char *start=p;
-        unsigned depth=0; bool quoted=false,escaped=false;
-        for(;p<end;++p) {
-            if(quoted) {
-                if(!escaped && *p=='"') quoted=false;
-                escaped=!escaped && *p=='\\';
-            } else if(*p=='"') quoted=true;
-            else if(*p=='{') ++depth;
-            else if(*p=='}' && --depth==0) { ++p; break; }
-        }
-        if(depth || quoted || p-start>32768) return false;
+        p=dashboard_json_object_end(start,end);
+        if(!p) return false;
         cJSON *row=cJSON_ParseWithLength(start,(size_t)(p-start));
         if(!cJSON_IsObject(row)) { cJSON_Delete(row); return false; }
         dashboard_energy_entry_t entry={0};

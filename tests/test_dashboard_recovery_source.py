@@ -12,6 +12,8 @@ SDK = r"""
 #include <stdint.h>
 #include <stdlib.h>
 #include <stddef.h>
+#include <assert.h>
+#include <windows.h>
 typedef int esp_err_t;
 #define ESP_OK 0
 #define ESP_FAIL -1
@@ -26,8 +28,19 @@ typedef int esp_err_t;
 #define MALLOC_CAP_SPIRAM 1
 #define MALLOC_CAP_8BIT 2
 #define portMUX_INITIALIZER_UNLOCKED 0
-#define portENTER_CRITICAL(x) ((void)(x))
-#define portEXIT_CRITICAL(x) ((void)(x))
+static __declspec(thread) unsigned critical_depth;
+#define portENTER_CRITICAL(x) (++critical_depth)
+#define portEXIT_CRITICAL(x) (--critical_depth)
+#define portMAX_DELAY UINT32_MAX
+typedef SRWLOCK StaticSemaphore_t;
+typedef StaticSemaphore_t *SemaphoreHandle_t;
+static LONG semaphore_takes;
+static SemaphoreHandle_t xSemaphoreCreateMutexStatic(StaticSemaphore_t *storage)
+{ InitializeSRWLock(storage);return storage; }
+static int xSemaphoreTake(SemaphoreHandle_t lock,unsigned timeout)
+{ assert(!critical_depth);AcquireSRWLockExclusive(lock);InterlockedIncrement(&semaphore_takes);return 1; }
+static int xSemaphoreGive(SemaphoreHandle_t lock)
+{ assert(!critical_depth);ReleaseSRWLockExclusive(lock);return 1; }
 #define pdMS_TO_TICKS(x) (x)
 #define pdPASS 1
 #define NVS_READONLY 0
@@ -238,7 +251,9 @@ int main(void)
     assert(!dashboard_data_energy_catalog_copy(catalog_generation,catalog,&catalog_state));
     assert(dashboard_data_energy_catalog_copy(energy_catalog.generation,catalog,&catalog_state) && catalog_state==DASH_DATA_WAITING);
     mode=20;update_energy_catalog("fake",&body);
+    LONG previous_takes=semaphore_takes;
     assert(dashboard_data_energy_catalog_copy(energy_catalog.generation,catalog,&catalog_state) && catalog_state==DASH_DATA_FRESH);
+    assert(semaphore_takes>previous_takes); /* Catalog bytes are protected by a task mutex, not an IRQ spinlock. */
     assert(catalog->count==1 && !strcmp(catalog->entries[0].id,"kyiv"));
     mode=22;response_status=429;
     assert(dashboard_data_energy_catalog_request(DASH_ENERGY_AREAS,NULL,NULL));
@@ -448,7 +463,10 @@ static void *lv_event_get_user_data(lv_event_t *e) { return e->data; }
 static object *lv_event_get_target_obj(lv_event_t *e) { return e->target; }
 static void *lv_obj_get_user_data(object *o) { return o->data; }
 static void lv_obj_set_user_data(object *o,void *d) { o->data=d; }
-static void lv_label_set_text(object *o,const char *t) { snprintf(o->text,sizeof(o->text),"%s",t); }
+static unsigned label_writes;
+static void lv_label_set_text(object *o,const char *t) { ++label_writes;snprintf(o->text,sizeof(o->text),"%s",t); }
+static void set_label_if_changed(object *o,const char *t) { if(strcmp(o->text,t)) lv_label_set_text(o,t); }
+static int lv_obj_get_style_y(object *o,int part) { return o->y; }
 static void lv_screen_load(object *o) { active=o; }
 static void update_remote_data(void *t) {}
 static object *make(object *p) { assert(p->count<128); object *o=calloc(1,sizeof(*o)); assert(o);p->children[p->count++]=o;return o; }
@@ -478,6 +496,7 @@ int main(void) {
  prepare_location_list();
  assert(location_list->count<=9);
  prepare_location_list();assert(location_list->count<=9);
+ label_writes=0;location_list->scroll=1;refresh_location_rows(NULL);assert(!label_writes);
  for(unsigned first=0;first<dashboard_region_count();++first) {
    location_list->scroll=(int)first*58;refresh_location_rows(NULL);
    for(unsigned i=0;i<location_list->count;++i) {
@@ -496,6 +515,7 @@ int main(void) {
    const dashboard_region_t *region=dashboard_region_at(r);
    object region_button={.data=(void *)region};
    lv_event_t e={.target=&region_button,.data=(void *)region};open_city_list(&e);
+   label_writes=0;city_list->scroll=1;refresh_city_rows(NULL);assert(!label_writes);
    assert(city_list->count<=9); /* At most eight reusable rows plus scroll extent. */
    unsigned total=0;
    for(size_t i=0;i<dashboard_city_count();++i) if(dashboard_city_at(i)->region==region->code) ++total;
@@ -623,7 +643,7 @@ int main(void) {
             (path / "sdk_stubs.h").write_text(SDK, encoding="utf-8")
             headers = ["esp_err.h", "esp_crt_bundle.h", "esp_http_client.h",
                        "esp_heap_caps.h", "esp_log.h", "esp_netif_sntp.h", "esp_timer.h",
-                       "nvs.h", "nvs_flash.h", "freertos/FreeRTOS.h", "freertos/task.h"]
+                       "nvs.h", "nvs_flash.h", "freertos/FreeRTOS.h", "freertos/task.h", "freertos/semphr.h"]
             for header in headers:
                 target = path / header
                 target.parent.mkdir(parents=True, exist_ok=True)

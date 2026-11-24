@@ -194,6 +194,7 @@ static void show_screen(lv_event_t *event)
     lv_obj_t *target = lv_event_get_user_data(event);
     if(target==location_screen) prepare_location_list();
     lv_screen_load(target);
+    if (target == schedule_screen) update_remote_data(NULL);
     if (target == wifi_screen) update_wifi_connection(NULL);
     if (target == system_screen) update_system(NULL);
 }
@@ -606,25 +607,40 @@ static const dashboard_energy_day_t *day_for_date(const dashboard_data_snapshot_
 
 static void render_track(lv_obj_t *track, const dashboard_energy_day_t *day, int now_minutes)
 {
+    static struct {
+        bool ready, planned;
+        uint8_t slots[DASH_ENERGY_SLOTS];
+        lv_obj_t *marker;
+    } tracks[2];
+    const unsigned index=track==energy_home_track ? 0 : 1;
+    const bool planned=has_plan(day);
     const int width = CARD_WIDTH - 24;
-    lv_obj_clean(track);
-    lv_obj_set_state(track, LV_STATE_USER_1, has_plan(day));
-    if (has_plan(day)) {
-        for (int start = 0; start < DASH_ENERGY_SLOTS;) {
-            const uint8_t kind = day->slots[start];
-            int end = start + 1;
-            while (end < DASH_ENERGY_SLOTS && day->slots[end] == kind) {
-                ++end;
+    if(!tracks[index].ready || tracks[index].planned!=planned ||
+       (planned && memcmp(tracks[index].slots,day->slots,sizeof(day->slots)))) {
+        lv_obj_clean(track);
+        lv_obj_set_state(track, LV_STATE_USER_1, planned);
+        if (planned) {
+            for (int start = 0; start < DASH_ENERGY_SLOTS;) {
+                const uint8_t kind = day->slots[start];
+                int end = start + 1;
+                while (end < DASH_ENERGY_SLOTS && day->slots[end] == kind) {
+                    ++end;
+                }
+                if (kind != DASH_SLOT_CLEAR) {
+                    const int x = start * width / DASH_ENERGY_SLOTS;
+                    surface(track, x, 0, end * width / DASH_ENERGY_SLOTS - x, 12, outage_color(kind), 0);
+                }
+                start = end;
             }
-            if (kind != DASH_SLOT_CLEAR) {
-                const int x = start * width / DASH_ENERGY_SLOTS;
-                surface(track, x, 0, end * width / DASH_ENERGY_SLOTS - x, 12, outage_color(kind), 0);
-            }
-            start = end;
         }
+        tracks[index].marker=surface(track,0,0,2,12,DASH_COLOR_TEXT,0);
+        tracks[index].ready=true;
+        tracks[index].planned=planned;
+        if(planned) memcpy(tracks[index].slots,day->slots,sizeof(day->slots));
     }
+    lv_obj_set_hidden(tracks[index].marker,now_minutes<0);
     if (now_minutes >= 0) {
-        surface(track, now_minutes * (width - 2) / MINUTES_PER_DAY, 0, 2, 12, DASH_COLOR_TEXT, 0);
+        lv_obj_set_x(tracks[index].marker,now_minutes * (width - 2) / MINUTES_PER_DAY);
     }
 }
 
@@ -751,10 +767,12 @@ static void update_energy_cards(const dashboard_data_snapshot_t *data)
     static int64_t displayed_revision = -1;
     static int displayed_state = -1;
     static bool displayed_tomorrow;
+    static bool displayed_detail;
     static uint32_t displayed_generation=UINT32_MAX;
+    const bool detail_visible=lv_screen_active()==schedule_screen;
     if (displayed_minute == current / 60 && displayed_revision == data->energy_updated_us &&
         displayed_state == (int)data->energy_state && displayed_tomorrow == energy_show_tomorrow &&
-        displayed_generation==data->energy_generation) {
+        displayed_generation==data->energy_generation && displayed_detail==detail_visible) {
         return;
     }
     displayed_minute = current / 60;
@@ -762,6 +780,7 @@ static void update_energy_cards(const dashboard_data_snapshot_t *data)
     displayed_state = data->energy_state;
     displayed_tomorrow = energy_show_tomorrow;
     displayed_generation=data->energy_generation;
+    displayed_detail=detail_visible;
 
     char date[11] = {0};
     if (current) {
@@ -770,6 +789,7 @@ static void update_energy_cards(const dashboard_data_snapshot_t *data)
     const dashboard_energy_day_t *today = day_for_date(data, date);
     render_track(energy_home_track, today, minutes);
     render_next_outage(data, today, minutes);
+    if(!detail_visible) return;
 
     if (current && energy_show_tomorrow) {
         ++local.tm_mday;
@@ -786,7 +806,17 @@ static void update_energy_cards(const dashboard_data_snapshot_t *data)
                           date[0] ? " · " : "", date);
     lv_label_set_text(energy_detail_note, energy_message(data, detail));
     render_track(energy_detail_track, detail, energy_show_tomorrow ? -1 : minutes);
-    render_intervals(detail);
+    /* Interval labels depend on the plan, not the minute or HTTP revision. */
+    static bool intervals_ready, intervals_present;
+    static dashboard_energy_day_t interval_day;
+    if(!intervals_ready || intervals_present!=(detail!=NULL) ||
+       (detail && (interval_day.state!=detail->state || strcmp(interval_day.date,detail->date) ||
+                   memcmp(interval_day.slots,detail->slots,sizeof(detail->slots))))) {
+        render_intervals(detail);
+        intervals_ready=true;
+        intervals_present=detail!=NULL;
+        if(detail) interval_day=*detail;
+    }
     if (data->energy_updated_us) {
         const long long age = (esp_timer_get_time() - data->energy_updated_us) / 60000000;
         lv_label_set_text_fmt(energy_detail_age, "%s · %s %s\nAlerts.energy · оновлено %lld хв тому",
@@ -897,6 +927,10 @@ static void refresh_city_rows(lv_event_t *event)
     int first=lv_obj_get_scroll_y(city_list)/58;
     if(first<0) first=0;
     if(first>=(int)city_count) first=city_count ? (int)city_count-1 : 0;
+    if(city_rows[0] && lv_obj_get_user_data(city_rows[0]) && lv_obj_get_style_y(city_rows[0],LV_PART_MAIN)==first*58) {
+        city_rows_updating=false;
+        return;
+    }
     const dashboard_city_t *visible[8]={0};
     unsigned index=0;
     for(size_t i=0;i<dashboard_city_count();++i) {
@@ -913,7 +947,7 @@ static void refresh_city_rows(lv_event_t *event)
         lv_obj_set_hidden(row,!city);
         if(!city) continue;
         lv_obj_set_y(row,(first+(int)i)*58);
-        lv_label_set_text(lv_obj_get_child(row,0),city->name);
+        set_label_if_changed(lv_obj_get_child(row,0),city->name);
         lv_obj_invalidate(row);
     }
     city_rows_updating=false;
@@ -960,6 +994,10 @@ static void refresh_location_rows(lv_event_t *event)
     if(first<0) first=0;
     const unsigned count=(unsigned)dashboard_region_count();
     if(first>=(int)count) first=(int)count-1;
+    if(location_rows[0] && lv_obj_get_user_data(location_rows[0])==dashboard_region_at((size_t)first)) {
+        location_rows_updating=false;
+        return;
+    }
     for(unsigned i=0;i<8;++i) {
         const dashboard_region_t *region=dashboard_region_at((size_t)first+i);
         lv_obj_t *row=location_rows[i];
@@ -967,7 +1005,7 @@ static void refresh_location_rows(lv_event_t *event)
         lv_obj_set_hidden(row,!region);
         if(!region) continue;
         lv_obj_set_y(row,(first+(int)i)*58);
-        lv_label_set_text(lv_obj_get_child(row,0),region->name);
+        set_label_if_changed(lv_obj_get_child(row,0),region->name);
     }
     location_rows_updating=false;
 }
@@ -1029,6 +1067,11 @@ static void refresh_energy_rows(lv_event_t *event)
     energy_rows_updating=true;
     int first=lv_obj_get_scroll_y(energy_settings_list)/58;
     if(first<0) first=0;
+    if(first>=(int)energy_ui_catalog->count) first=energy_ui_catalog->count ? (int)energy_ui_catalog->count-1 : 0;
+    if(energy_rows[0] && lv_obj_get_user_data(energy_rows[0]) && lv_obj_get_style_y(energy_rows[0],LV_PART_MAIN)==first*58) {
+        energy_rows_updating=false;
+        return;
+    }
     for(unsigned i=0;i<8;++i) {
         lv_obj_t *row=energy_rows[i];
         if(!row) continue;
@@ -1038,7 +1081,7 @@ static void refresh_energy_rows(lv_event_t *event)
         lv_obj_set_hidden(row,!entry);
         if(!entry) continue;
         lv_obj_set_y(row,(first+(int)i)*58);
-        lv_label_set_text(lv_obj_get_child(row,0),entry->name);
+        set_label_if_changed(lv_obj_get_child(row,0),entry->name);
     }
     energy_rows_updating=false;
 }
@@ -1450,34 +1493,35 @@ static void update_alert_card(const dashboard_data_snapshot_t *data)
             lv_obj_invalidate(home.alert_card);
         }
     }
-    if (data->alerts_state == DASH_DATA_FRESH || data->alerts_state == DASH_DATA_STALE) {
-        update_age(alert_note, data->alerts_updated_us, data->alerts_state == DASH_DATA_STALE);
-    } else {
-        set_label_if_changed(alert_note, note);
+    /* Choose final strings before touching LVGL; intermediate defaults cause allocation churn. */
+    const char *detail_note=NULL,*threat_note="Торкніться карти ›";
+    char note_text[96],threat_text[96];
+    if(data->alerts_state==DASH_DATA_FRESH && data->region_alerts[data->location->region]!='N') {
+        if(data->alert_details_state!=DASH_DATA_FRESH) threat_note="Типи загроз недоступні";
+        else {
+            const dashboard_alert_record_t *primary=dashboard_alert_primary(&screen_alert_details,
+                data->region_alerts[data->location->region]);
+            if(primary) {
+                char clock[6];
+                const int64_t minutes=dashboard_alert_elapsed(primary->started_at,(int64_t)time(NULL));
+                if(minutes>=0 && dashboard_alert_kyiv_clock(primary->started_at,clock)) {
+                    snprintf(note_text,sizeof(note_text),"Від %s · %lld хв",clock,(long long)minutes);
+                    detail_note=note_text;
+                } else detail_note="Час початку невідомий";
+                if(primary->threat_count) {
+                    snprintf(threat_text,sizeof(threat_text),"%s%s",dashboard_alert_threat_name(primary->threats[0]),
+                        primary->threat_count>1 || primary->threats_omitted ? " та інші" : "");
+                    threat_note=threat_text;
+                } else threat_note="Тип загрози не вказано";
+            } else if(screen_alert_details.count)
+                detail_note=screen_alert_details.count>1 ? "Кілька локальних тривог" : "Окрема локальна тривога";
+        }
     }
-    set_label_if_changed(alert_threat, "Торкніться карти ›");
-    if (data->alerts_state != DASH_DATA_FRESH || data->region_alerts[data->location->region] == 'N') return;
-    if (data->alert_details_state != DASH_DATA_FRESH) {
-        set_label_if_changed(alert_threat, "Типи загроз недоступні");
-        return;
-    }
-    const dashboard_alert_record_t *primary = dashboard_alert_primary(&screen_alert_details,
-                                                                      data->region_alerts[data->location->region]);
-    if (primary) {
-        char clock[6], text[96];
-        const int64_t minutes = dashboard_alert_elapsed(primary->started_at, (int64_t)time(NULL));
-        if (minutes >= 0 && dashboard_alert_kyiv_clock(primary->started_at, clock)) {
-            snprintf(text, sizeof(text), "Від %s · %lld хв", clock, (long long)minutes);
-            set_label_if_changed(alert_note, text);
-        } else set_label_if_changed(alert_note, "Час початку невідомий");
-        if (primary->threat_count) {
-            snprintf(text, sizeof(text), "%s%s", dashboard_alert_threat_name(primary->threats[0]),
-                     primary->threat_count > 1 || primary->threats_omitted ? " та інші" : "");
-            set_label_if_changed(alert_threat, text);
-        } else set_label_if_changed(alert_threat, "Тип загрози не вказано");
-    } else if (screen_alert_details.count) {
-        set_label_if_changed(alert_note, screen_alert_details.count > 1 ? "Кілька локальних тривог" : "Окрема локальна тривога");
-    }
+    if(detail_note) set_label_if_changed(alert_note,detail_note);
+    else if(data->alerts_state==DASH_DATA_FRESH || data->alerts_state==DASH_DATA_STALE)
+        update_age(alert_note,data->alerts_updated_us,data->alerts_state==DASH_DATA_STALE);
+    else set_label_if_changed(alert_note,note);
+    set_label_if_changed(alert_threat,threat_note);
 }
 
 /* Badges represent territorial threats, not individual target positions. */
