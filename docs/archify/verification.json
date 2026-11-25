@@ -1,0 +1,237 @@
+{
+  "sourceRepository": "https://github.com/NomerovskiySergey/home-dashboard",
+  "sourceRevision": "271ce3279edf3d1160f0a0efc9ea83e19b3943ab",
+  "generatorRepository": "https://github.com/tt-a1i/archify",
+  "generatorRevision": "62f3a995eb26ee23f784bdea4a7992340078e9be",
+  "localeNote": "Authored labels are Ukrainian. Viewer UI and HTML lang use Archify English fallback.",
+  "firmwareTestsRun": false,
+  "firmwareCodeChanged": false,
+  "localLinksChecked": 102,
+  "diagrams": [
+    {
+      "id": "overview",
+      "type": "architecture",
+      "html": "overview.html",
+      "source": "overview.json",
+      "svg": "overview.svg",
+      "sourceSha256": "1d5f9d6d424be114d0072c3d7758897751e17dbcf3854e0fdd7239e1f330c379",
+      "htmlSha256": "0fd350b3d2a5599908c75818cd085ef862a0a1104c5c126e098b55763222e44a",
+      "svgSha256": "913192f8343be98684ec185650980d15ac7d3133ff8d84c5e8586dd5e9497317",
+      "gates": {
+        "validate": "pass",
+        "deliver": "pass",
+        "check": "pass",
+        "browser-check": "pass"
+      },
+      "repositoryReferences": {
+        "status": "verified",
+        "revision": "271ce3279edf3d1160f0a0efc9ea83e19b3943ab",
+        "count": 20
+      },
+      "browserReceipt": "overview.browser-check.json",
+      "knownWarnings": [
+        "i18n/locale-fallback"
+      ]
+    },
+    {
+      "id": "interaction",
+      "type": "sequence",
+      "html": "interaction.html",
+      "source": "interaction.json",
+      "svg": "interaction.svg",
+      "sourceSha256": "da5608ae34269326cc64c514168c2e722ac76148332e7e9193edfbd476de0c60",
+      "htmlSha256": "d62acddba1333ca70f7ea52e96589f33fa7559768d3d2d126b62c527b350a3bc",
+      "svgSha256": "70c03183168ebf28f0c62616c94e410cfa20d09e2d3010bea9a727b07b009703",
+      "gates": {
+        "validate": "pass",
+        "deliver": "pass",
+        "check": "pass",
+        "browser-check": "pass"
+      },
+      "repositoryReferences": {
+        "status": "verified",
+        "revision": "271ce3279edf3d1160f0a0efc9ea83e19b3943ab",
+        "count": 7
+      },
+      "browserReceipt": "interaction-review-2/interaction.browser-check.json",
+      "knownWarnings": [
+        "i18n/locale-fallback"
+      ]
+    },
+    {
+      "id": "location",
+      "type": "sequence",
+      "html": "location.html",
+      "source": "location.json",
+      "svg": "location.svg",
+      "sourceSha256": "eb53de8d42a724f40bfe54d3d03c2a32e34f7e74ab7f185a8d044be93af7f305",
+      "htmlSha256": "c9c4441b2f4828f63220174bc2170a8917787439e6fc9a1593e0a6256081c98d",
+      "svgSha256": "6840736cbb443c9c4bf34353f3354953b6c2a23abbf494b5bf4038e3d7e3e3d7",
+      "gates": {
+        "validate": "pass",
+        "deliver": "pass",
+        "check": "pass",
+        "browser-check": "pass"
+      },
+      "repositoryReferences": {
+        "status": "verified",
+        "revision": "271ce3279edf3d1160f0a0efc9ea83e19b3943ab",
+        "count": 8
+      },
+      "browserReceipt": "location.browser-check.json",
+      "knownWarnings": [
+        "i18n/locale-fallback"
+      ]
+    },
+    {
+      "id": "alerts",
+      "type": "architecture",
+      "html": "alerts.html",
+      "source": "alerts.json",
+      "svg": "alerts.svg",
+      "sourceSha256": "8a960a89f3d6d23c464879cc65a772e9576477baaf2caa2e586b23625700d12f",
+      "htmlSha256": "9cea650d3febbc1e379597588581c882b1f34be9ccf8b36c7f61240091db6505",
+      "svgSha256": "3601b63784c782299935b76d829539d727b4fc1a096eeb5e6a3580c8ee7bf9aa",
+      "gates": {
+        "validate": "pass",
+        "deliver": "pass",
+        "check": "pass",
+        "browser-check": "pass"
+      },
+      "repositoryReferences": {
+        "status": "verified",
+        "revision": "271ce3279edf3d1160f0a0efc9ea83e19b3943ab",
+        "count": 12
+      },
+      "browserReceipt": "alerts.browser-check.json",
+      "knownWarnings": [
+        "i18n/locale-fallback"
+      ]
+    },
+    {
+      "id": "energy",
+      "type": "sequence",
+      "html": "energy.html",
+      "source": "energy.json",
+      "svg": "energy.svg",
+      "sourceSha256": "f6a6c366a92441d6d9c239e449d5945b36714ac579b63fb2904a682535f6056a",
+      "htmlSha256": "1bb1069c13b33f724dcaea4ae2359eadff07c6ccef4ca426c1731059fac36958",
+      "svgSha256": "497ea69ad7aa558196cde6fc1f2249dc0b68d0495ffaaac20602bbf97c30dd97",
+      "gates": {
+        "validate": "pass",
+        "deliver": "pass",
+        "check": "pass",
+        "browser-check": "pass"
+      },
+      "repositoryReferences": {
+        "status": "verified",
+        "revision": "271ce3279edf3d1160f0a0efc9ea83e19b3943ab",
+        "count": 9
+      },
+      "browserReceipt": "energy-review-2/energy.browser-check.json",
+      "knownWarnings": [
+        "i18n/locale-fallback"
+      ]
+    },
+    {
+      "id": "wifi",
+      "type": "sequence",
+      "html": "wifi.html",
+      "source": "wifi.json",
+      "svg": "wifi.svg",
+      "sourceSha256": "91b2f6b1eec102879a26234b841ab06ff0d9e755b7aa7535e64ae0b5aecdc1c6",
+      "htmlSha256": "2613aecd59f64687192923794085c0670599dffe9268b9335b0ce69074c3577a",
+      "svgSha256": "3f804a1723c67d092659f8e5231408f25139483e03d6aaf53dbc9ce71d93ac9c",
+      "gates": {
+        "validate": "pass",
+        "deliver": "pass",
+        "check": "pass",
+        "browser-check": "pass"
+      },
+      "repositoryReferences": {
+        "status": "verified",
+        "revision": "271ce3279edf3d1160f0a0efc9ea83e19b3943ab",
+        "count": 7
+      },
+      "browserReceipt": "wifi.browser-check.json",
+      "knownWarnings": [
+        "i18n/locale-fallback"
+      ]
+    },
+    {
+      "id": "display",
+      "type": "architecture",
+      "html": "display.html",
+      "source": "display.json",
+      "svg": "display.svg",
+      "sourceSha256": "81e9252a549592b310604168f8ed465760bd978b9461c5848b1d2792c7cc95a5",
+      "htmlSha256": "563cf9704c72affc90af490e2a0c547749875a7d3cf7b584204c8517653e36ea",
+      "svgSha256": "405d0bd0ce983aad94cbe2bc3bc4540e8ca1d5f9b8c29812ce970e12d07ee373",
+      "gates": {
+        "validate": "pass",
+        "deliver": "pass",
+        "check": "pass",
+        "browser-check": "pass"
+      },
+      "repositoryReferences": {
+        "status": "verified",
+        "revision": "271ce3279edf3d1160f0a0efc9ea83e19b3943ab",
+        "count": 10
+      },
+      "browserReceipt": "display.browser-check.json",
+      "knownWarnings": [
+        "i18n/locale-fallback"
+      ]
+    },
+    {
+      "id": "recovery",
+      "type": "lifecycle",
+      "html": "recovery.html",
+      "source": "recovery.json",
+      "svg": "recovery.svg",
+      "sourceSha256": "58fafebeae626b3ca47a473197a2a0dc3d166e6d7f34cadc3d78b5e1dca98754",
+      "htmlSha256": "884bf898dfd2b76065f0c15f436f5aa39fbf2b1c755ece2c133b55a572b46a05",
+      "svgSha256": "6d26152d4bb1882f68f5a9fdb2366ae8becc06ddaebc8e57ddc77f18f5b7c82f",
+      "gates": {
+        "validate": "pass",
+        "deliver": "pass",
+        "check": "pass",
+        "browser-check": "pass"
+      },
+      "repositoryReferences": {
+        "status": "verified",
+        "revision": "271ce3279edf3d1160f0a0efc9ea83e19b3943ab",
+        "count": 7
+      },
+      "browserReceipt": "recovery-review-3/recovery.browser-check.json",
+      "knownWarnings": [
+        "i18n/locale-fallback"
+      ]
+    },
+    {
+      "id": "types",
+      "type": "class",
+      "html": "types.html",
+      "source": "types.json",
+      "svg": "types.svg",
+      "sourceSha256": "c09762eb3944179e859daf8508b7455a5f485e3539b9931decc0d7db7d9858f8",
+      "htmlSha256": "818bbf03aa25ca9d8b8a056d8d9268f5352b9dfbd1b83fb8c76c01b877ec9ba0",
+      "svgSha256": "f0e261d36e58e29af9382cd1e78e471ab3d81b9c255e673c9a49c0cf9cfbc0b8",
+      "gates": {
+        "validate": "pass",
+        "deliver": "pass",
+        "check": "pass",
+        "browser-check": "pass"
+      },
+      "repositoryReferences": {
+        "status": "verified",
+        "revision": "271ce3279edf3d1160f0a0efc9ea83e19b3943ab",
+        "count": 5
+      },
+      "browserReceipt": "types.browser-check.json",
+      "knownWarnings": [
+        "i18n/locale-fallback"
+      ]
+    }
+  ]
+}

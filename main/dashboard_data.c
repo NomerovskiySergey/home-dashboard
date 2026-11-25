@@ -17,6 +17,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "nvs.h"
 #include "nvs_flash.h"
 
@@ -52,6 +53,9 @@ static unsigned map_generation, details_generation;
 static uint32_t details_location_generation;
 static bool details_urgent = true;
 static portMUX_TYPE data_lock = portMUX_INITIALIZER_UNLOCKED;
+/* Large PSRAM catalog copies run with interrupts enabled. Never hold this across HTTPS. */
+static StaticSemaphore_t catalog_mutex_storage;
+static SemaphoreHandle_t catalog_mutex;
 static dashboard_recovery_t recovery;
 static dashboard_recovery_t worker_recovery[WORKER_COUNT];
 static startup_state_t startup_state;
@@ -460,16 +464,14 @@ uint32_t dashboard_data_energy_catalog_request(dashboard_energy_catalog_kind_t k
 {
     if(kind>DASH_ENERGY_QUEUES || (kind!=DASH_ENERGY_AREAS && !dashboard_energy_id_valid(area,DASH_ENERGY_ID_SIZE,false)) ||
        (kind==DASH_ENERGY_QUEUES && !dashboard_energy_id_valid(initiator,DASH_ENERGY_ID_SIZE,false))) return 0;
-    /* UI is the sole requester; publication and detachment remain under data_lock. */
+    if(!catalog_mutex) return 0;
+    xSemaphoreTake(catalog_mutex,portMAX_DELAY);
     if(!energy_catalog.data) {
         dashboard_energy_catalog_t *allocated=heap_caps_malloc(sizeof(*allocated),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
-        if(!allocated) return 0;
+        if(!allocated) { xSemaphoreGive(catalog_mutex); return 0; }
         memset(allocated,0,sizeof(*allocated));
-        portENTER_CRITICAL(&data_lock);
         energy_catalog.data=allocated;
-        portEXIT_CRITICAL(&data_lock);
     }
-    portENTER_CRITICAL(&data_lock);
     if(!++energy_catalog.generation) ++energy_catalog.generation;
     const uint32_t generation=energy_catalog.generation;
     energy_catalog.kind=kind;
@@ -478,44 +480,46 @@ uint32_t dashboard_data_energy_catalog_request(dashboard_energy_catalog_kind_t k
     energy_catalog.pending=true;
     energy_catalog.data->count=0;
     energy_catalog.state=workers[WORKER_ENERGY].has_key ? DASH_DATA_WAITING : DASH_DATA_NO_TOKEN;
-    portEXIT_CRITICAL(&data_lock);
+    xSemaphoreGive(catalog_mutex);
     return generation;
 }
 
 bool dashboard_data_energy_catalog_copy(uint32_t generation,dashboard_energy_catalog_t *out,
                                        dashboard_data_state_t *state)
 {
-    portENTER_CRITICAL(&data_lock);
+    if(!catalog_mutex) return false;
+    xSemaphoreTake(catalog_mutex,portMAX_DELAY);
     const bool matching=generation && generation==energy_catalog.generation && energy_catalog.data;
     if(matching) {
         *state=energy_catalog.state;
         if(out && *state==DASH_DATA_FRESH) *out=*energy_catalog.data;
     }
-    portEXIT_CRITICAL(&data_lock);
+    xSemaphoreGive(catalog_mutex);
     return matching;
 }
 
 void dashboard_data_energy_catalog_cancel(void)
 {
-    portENTER_CRITICAL(&data_lock);
+    if(!catalog_mutex) return;
+    xSemaphoreTake(catalog_mutex,portMAX_DELAY);
     dashboard_energy_catalog_t *discard=energy_catalog.data;
     energy_catalog.data=NULL;
     energy_catalog.pending=false;
     ++energy_catalog.generation;
-    portEXIT_CRITICAL(&data_lock);
+    xSemaphoreGive(catalog_mutex);
     free(discard);
 }
 
 static void update_energy_catalog(const char *authorization,http_body_t *body)
 {
     char area[DASH_ENERGY_ID_SIZE],initiator[DASH_ENERGY_ID_SIZE],url[256];
-    portENTER_CRITICAL(&data_lock);
+    xSemaphoreTake(catalog_mutex,portMAX_DELAY);
     const bool pending=energy_catalog.pending;
     const uint32_t generation=energy_catalog.generation;
     const dashboard_energy_catalog_kind_t kind=energy_catalog.kind;
     memcpy(area,energy_catalog.area,sizeof(area));
     memcpy(initiator,energy_catalog.initiator,sizeof(initiator));
-    portEXIT_CRITICAL(&data_lock);
+    xSemaphoreGive(catalog_mutex);
     if(!pending) return;
     if(kind==DASH_ENERGY_AREAS) snprintf(url,sizeof(url),"https://alerts.energy/api/v1/source-registry/areas/overview");
     else snprintf(url,sizeof(url),"https://alerts.energy/api/v1/source-registry/areas/%s/%s",area,
@@ -530,13 +534,17 @@ static void update_energy_catalog(const char *authorization,http_body_t *body)
         body->url=NULL;
         valid=status==200 && dashboard_energy_catalog_parse(body->text,body->length,kind,initiator,parsed);
     }
-    portENTER_CRITICAL(&data_lock);
+    xSemaphoreTake(catalog_mutex,portMAX_DELAY);
     if(generation==energy_catalog.generation && energy_catalog.data && !body->cancelled) {
         energy_catalog.pending=false;
         energy_catalog.state=valid ? DASH_DATA_FRESH : status==401 || status==403 ? DASH_DATA_AUTH_ERROR : DASH_DATA_UNAVAILABLE;
-        if(valid) *energy_catalog.data=*parsed;
+        if(valid) {
+            dashboard_energy_catalog_t *previous=energy_catalog.data;
+            energy_catalog.data=parsed;
+            parsed=previous;
+        }
     }
-    portEXIT_CRITICAL(&data_lock);
+    xSemaphoreGive(catalog_mutex);
     free(parsed);
 }
 
@@ -783,7 +791,8 @@ esp_err_t dashboard_data_start(void)
     latest.energy_state = workers[WORKER_ENERGY].has_key ? DASH_DATA_WAITING : DASH_DATA_NO_TOKEN;
     portEXIT_CRITICAL(&data_lock);
 
-    bool created = xTaskCreate(data_supervisor, "data_supervisor", 3072, NULL, 3, NULL) == pdPASS;
+    catalog_mutex=xSemaphoreCreateMutexStatic(&catalog_mutex_storage);
+    bool created = catalog_mutex && xTaskCreate(data_supervisor, "data_supervisor", 3072, NULL, 3, NULL) == pdPASS;
     for (int i = 0; created && i < WORKER_COUNT; ++i)
         created = xTaskCreate(data_task, workers[i].name, 10240, &workers[i], 3, NULL) == pdPASS;
     portENTER_CRITICAL(&data_lock);

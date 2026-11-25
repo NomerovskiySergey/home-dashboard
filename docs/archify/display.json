@@ -1,0 +1,181 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Екран: теми, сон і пробудження",
+    "output": "docs/archify/display.html",
+    "locale": "uk",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/NomerovskiySergey/home-dashboard.git",
+      "revision": "271ce3279edf3d1160f0a0efc9ea83e19b3943ab"
+    },
+    "parentHref": "overview.html"
+  },
+  "layout": {
+    "mode": "auto"
+  },
+  "components": [
+    {
+      "id": "ui",
+      "type": "frontend",
+      "label": "LVGL UI",
+      "sublabel": "Палітра / input wrapper",
+      "sources": [
+        {
+          "path": "main/dashboard_screen.c",
+          "line": 1781,
+          "end_line": 1804
+        },
+        {
+          "path": "main/dashboard_screen.c",
+          "line": 1985,
+          "end_line": 1986
+        },
+        {
+          "path": "main/dashboard_screen.c",
+          "line": 395,
+          "end_line": 425
+        }
+      ]
+    },
+    {
+      "id": "themes",
+      "type": "backend",
+      "label": "Теми",
+      "sublabel": "Standard / PDA / Pip-Boy",
+      "sources": [
+        {
+          "path": "main/dashboard_theme.h",
+          "line": 44,
+          "end_line": 59
+        }
+      ],
+      "explanation": "dashboard_theme задає палітри та home_layout; dashboard_screen застосовує стилі, PDA/Pip-Boy виконують декоративне малювання."
+    },
+    {
+      "id": "mode",
+      "type": "backend",
+      "label": "Display mode",
+      "sublabel": "Чиста модель стану",
+      "sources": [
+        {
+          "path": "main/dashboard_display_mode.c",
+          "line": 10,
+          "end_line": 59
+        }
+      ]
+    },
+    {
+      "id": "nvs",
+      "type": "database",
+      "label": "Налаштування",
+      "sublabel": "dash_display / flags / theme",
+      "sources": [
+        {
+          "path": "main/dashboard_screen.c",
+          "line": 395,
+          "end_line": 425
+        },
+        {
+          "path": "main/dashboard_screen.c",
+          "line": 506,
+          "end_line": 521
+        }
+      ]
+    },
+    {
+      "id": "backlight",
+      "type": "backend",
+      "label": "LEDC",
+      "sublabel": "0 / 8 / 100 відсотків",
+      "sources": [
+        {
+          "path": "main/dashboard.c",
+          "line": 19,
+          "end_line": 26
+        },
+        {
+          "path": "main/dashboard_display_mode.c",
+          "line": 16,
+          "end_line": 26
+        }
+      ]
+    },
+    {
+      "id": "data",
+      "type": "database",
+      "label": "Свіжий статус",
+      "sublabel": "Обрана територія",
+      "sources": [
+        {
+          "path": "main/dashboard_screen.c",
+          "line": 1781,
+          "end_line": 1803
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "ui-themes",
+      "from": "ui",
+      "to": "themes",
+      "label": "Обрати палітру",
+      "variant": "default"
+    },
+    {
+      "id": "ui-nvs",
+      "from": "ui",
+      "to": "nvs",
+      "label": "Зберегти",
+      "variant": "default"
+    },
+    {
+      "id": "ui-mode",
+      "from": "ui",
+      "to": "mode",
+      "label": "Час / дотик",
+      "variant": "default"
+    },
+    {
+      "id": "data-ui",
+      "from": "data",
+      "to": "ui",
+      "label": "Статус",
+      "variant": "default"
+    },
+    {
+      "id": "ui-backlight",
+      "from": "ui",
+      "to": "backlight",
+      "label": "Застосувати",
+      "variant": "default"
+    },
+    {
+      "id": "mode-ui",
+      "from": "mode",
+      "to": "ui",
+      "label": "Стан / яскравість",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "title": "Режими",
+      "items": [
+        "Ніч: 22:00–07:00 → 8%; ECO: 60 с без активності → 0%.",
+        "Перший дотик будить і поглинається до відпускання."
+      ],
+      "dot": "cyan"
+    },
+    {
+      "title": "Пробудження від тривоги",
+      "items": [
+        "Потрібен свіжий перехід неактивного статусу до R/P і ввімкнений alert wake.",
+        "При зміні міста alert_known скидається; мережеві задачі під час сну працюють."
+      ],
+      "dot": "amber"
+    }
+  ]
+}

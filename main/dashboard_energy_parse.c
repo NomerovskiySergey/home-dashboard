@@ -1,4 +1,5 @@
 #include "dashboard_data_parse.h"
+#include "dashboard_json.h"
 
 #include <ctype.h>
 #include <string.h>
@@ -89,28 +90,6 @@ static const char *skip_space(const char *cursor, const char *end)
     return cursor;
 }
 
-static const char *object_end(const char *cursor, const char *end)
-{
-    unsigned depth = 0;
-    bool in_string = false;
-    bool escaped = false;
-    for (; cursor < end; ++cursor) {
-        if (in_string) {
-            if (!escaped && *cursor == '"') {
-                in_string = false;
-            }
-            escaped = !escaped && *cursor == '\\';
-        } else if (*cursor == '"') {
-            in_string = true;
-        } else if (*cursor == '{') {
-            ++depth;
-        } else if (*cursor == '}' && --depth == 0) {
-            return cursor + 1;
-        }
-    }
-    return NULL;
-}
-
 bool dashboard_parse_energy_selected(const char *body, size_t length, const char *initiator,
                                     const char *queue, dashboard_energy_schedule_t *out)
 {
@@ -129,8 +108,8 @@ bool dashboard_parse_energy_selected(const char *body, size_t length, const char
         if (cursor == end || *cursor != '{') {
             return false;
         }
-        const char *next = object_end(cursor, end);
-        if (!next || (size_t)(next - cursor) > 32768) {
+        const char *next = dashboard_json_object_end(cursor, end);
+        if (!next) {
             return false;
         }
         cJSON *item = cJSON_ParseWithLength(cursor, (size_t)(next - cursor));

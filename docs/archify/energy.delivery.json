@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "0e8a5dac-52ba-477c-9436-e4ca448465c0",
+  "status": "current",
+  "command": "deliver",
+  "type": "sequence",
+  "input": "C:\\work\\home-dashboard\\docs\\archify\\energy.json",
+  "output": "C:\\work\\home-dashboard\\docs\\archify\\energy.html",
+  "specification": {
+    "sha256": "f6a6c366a92441d6d9c239e449d5945b36714ac579b63fb2904a682535f6056a",
+    "bytes": 4864
+  },
+  "artifact": {
+    "sha256": "1bb1069c13b33f724dcaea4ae2359eadff07c6ccef4ca426c1731059fac36958",
+    "bytes": 929069
+  }
+}

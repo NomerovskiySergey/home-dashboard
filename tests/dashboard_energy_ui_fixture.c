@@ -44,6 +44,7 @@ int main(void)
         }
         open_energy_settings(NULL); update_energy_settings(NULL);
         assert(energy_settings_list->count<=9 && saves==cycle);
+        label_writes=0;energy_settings_list->scroll+=1;refresh_energy_rows(NULL);assert(!label_writes);
         energy_settings_list->scroll=12*58;refresh_energy_rows(NULL);
         assert(!strcmp(((dashboard_energy_entry_t *)energy_rows[0]->data)->id,"area-12"));
         lv_event_t touch={.target=energy_rows[0]}; select_energy_row(&touch);

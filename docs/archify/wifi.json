@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Wi-Fi: локальне налаштування з телефона",
+    "output": "docs/archify/wifi.html",
+    "locale": "uk",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/NomerovskiySergey/home-dashboard.git",
+      "revision": "271ce3279edf3d1160f0a0efc9ea83e19b3943ab"
+    },
+    "parentHref": "overview.html"
+  },
+  "participants": [
+    {
+      "id": "phone",
+      "type": "external",
+      "label": "Телефон",
+      "sublabel": "Браузер / SoftAP",
+      "sources": [
+        {
+          "path": "main/dashboard_wifi_web.c",
+          "line": 51,
+          "end_line": 77
+        }
+      ]
+    },
+    {
+      "id": "http",
+      "type": "frontend",
+      "label": "HTTP-форма",
+      "sublabel": "GET / та POST /wifi",
+      "sources": [
+        {
+          "path": "main/dashboard_wifi_web.c",
+          "line": 15,
+          "end_line": 41
+        },
+        {
+          "path": "main/dashboard_wifi_web.c",
+          "line": 124,
+          "end_line": 185
+        }
+      ]
+    },
+    {
+      "id": "prov",
+      "type": "backend",
+      "label": "Provisioning",
+      "sublabel": "network_prov manager",
+      "sources": [
+        {
+          "path": "main/dashboard_wifi.c",
+          "line": 115,
+          "end_line": 150
+        },
+        {
+          "path": "main/dashboard_wifi_web.c",
+          "line": 169,
+          "end_line": 185
+        }
+      ]
+    },
+    {
+      "id": "events",
+      "type": "backend",
+      "label": "Event loop",
+      "sublabel": "dashboard_wifi",
+      "sources": [
+        {
+          "path": "main/dashboard_wifi.c",
+          "line": 167,
+          "end_line": 225
+        }
+      ]
+    },
+    {
+      "id": "nvs",
+      "type": "database",
+      "label": "NVS Wi-Fi",
+      "sublabel": "station_v1",
+      "sources": [
+        {
+          "path": "main/dashboard_wifi.c",
+          "line": 153,
+          "end_line": 164
+        }
+      ]
+    }
+  ],
+  "messages": [
+    {
+      "id": "step-1",
+      "from": "phone",
+      "to": "http",
+      "label": "GET / через AP пристрою",
+      "variant": "default",
+      "y": 160
+    },
+    {
+      "id": "step-2",
+      "from": "http",
+      "to": "phone",
+      "label": "Форма з setup code",
+      "variant": "return",
+      "y": 204
+    },
+    {
+      "id": "step-3",
+      "from": "phone",
+      "to": "http",
+      "label": "POST /wifi: SSID / пароль / code",
+      "variant": "default",
+      "y": 248
+    },
+    {
+      "id": "step-4",
+      "from": "http",
+      "to": "prov",
+      "label": "Після перевірок: configure_wifi_sta",
+      "variant": "default",
+      "y": 292
+    },
+    {
+      "id": "step-5",
+      "from": "prov",
+      "to": "events",
+      "label": "CRED_SUCCESS: підключення успішне",
+      "variant": "default",
+      "y": 336
+    },
+    {
+      "id": "step-6",
+      "from": "events",
+      "to": "nvs",
+      "label": "Зберегти credentials / commit",
+      "variant": "default",
+      "y": 380
+    },
+    {
+      "id": "step-7",
+      "from": "prov",
+      "to": "events",
+      "label": "PROV_END: завершити setup",
+      "variant": "default",
+      "y": 424
+    }
+  ],
+  "cards": [
+    {
+      "title": "Власник стану",
+      "items": [
+        "Життєвим циклом Wi-Fi керує ESP event loop.",
+        "UI читає атомарний state; SSID/IP/RSSI оновлюються окремо."
+      ],
+      "dot": "cyan"
+    },
+    {
+      "title": "Межі локальної форми",
+      "items": [
+        "Форма працює через HTTP на AP, перевіряє локальний endpoint, code та поля.",
+        "Це введення Wi-Fi credentials, а не браузерний дашборд."
+      ],
+      "dot": "amber"
+    }
+  ]
+}

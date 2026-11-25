@@ -1,0 +1,223 @@
+{
+  "schema_version": 1,
+  "diagram_type": "class",
+  "meta": {
+    "title": "Модель даних C: структури та зв’язки",
+    "output": "docs/archify/types.html",
+    "locale": "uk",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/NomerovskiySergey/home-dashboard.git",
+      "revision": "271ce3279edf3d1160f0a0efc9ea83e19b3943ab"
+    }
+  },
+  "layout": {
+    "mode": "grid"
+  },
+  "types": [
+    {
+      "id": "snapshot",
+      "label": "dashboard_data_snapshot_t",
+      "kind": "record",
+      "row": 0,
+      "col": 0,
+      "attributes": [
+        {
+          "name": "location",
+          "type": "const city_t *"
+        },
+        {
+          "name": "location_generation",
+          "type": "uint32_t"
+        },
+        {
+          "name": "energy",
+          "type": "schedule_t"
+        },
+        {
+          "name": "energy_selection",
+          "type": "selection_t"
+        },
+        {
+          "name": "energy_generation",
+          "type": "uint32_t"
+        }
+      ],
+      "sources": [
+        {
+          "path": "main/dashboard_data.h",
+          "line": 22,
+          "end_line": 39
+        }
+      ]
+    },
+    {
+      "id": "city",
+      "label": "dashboard_city_t",
+      "kind": "record",
+      "row": 0,
+      "col": 1,
+      "attributes": [
+        {
+          "name": "id / name",
+          "type": "const char *"
+        },
+        {
+          "name": "latitude_e4",
+          "type": "int32_t"
+        },
+        {
+          "name": "longitude_e4",
+          "type": "int32_t"
+        },
+        {
+          "name": "region",
+          "type": "uint8_t"
+        },
+        {
+          "name": "map_x / map_y",
+          "type": "int16_t"
+        }
+      ],
+      "sources": [
+        {
+          "path": "main/dashboard_location.h",
+          "line": 8,
+          "end_line": 13
+        }
+      ]
+    },
+    {
+      "id": "schedule",
+      "label": "dashboard_energy_schedule_t",
+      "kind": "record",
+      "row": 1,
+      "col": 0,
+      "attributes": [
+        {
+          "name": "today",
+          "type": "day_t"
+        },
+        {
+          "name": "tomorrow",
+          "type": "day_t"
+        }
+      ],
+      "sources": [
+        {
+          "path": "main/dashboard_data_parse.h",
+          "line": 25,
+          "end_line": 28
+        }
+      ]
+    },
+    {
+      "id": "selection",
+      "label": "dashboard_energy_selection_t",
+      "kind": "record",
+      "row": 1,
+      "col": 1,
+      "attributes": [
+        {
+          "name": "area / initiator",
+          "type": "char[80]"
+        },
+        {
+          "name": "area_name",
+          "type": "char[112]"
+        },
+        {
+          "name": "supplier_name",
+          "type": "char[112]"
+        },
+        {
+          "name": "queue",
+          "type": "char[24]"
+        }
+      ],
+      "sources": [
+        {
+          "path": "main/dashboard_energy.h",
+          "line": 6,
+          "end_line": 11
+        }
+      ]
+    },
+    {
+      "id": "day",
+      "label": "dashboard_energy_day_t",
+      "kind": "record",
+      "row": 2,
+      "col": 0,
+      "attributes": [
+        {
+          "name": "date",
+          "type": "char[11]"
+        },
+        {
+          "name": "state",
+          "type": "day_state_t"
+        },
+        {
+          "name": "slots",
+          "type": "uint8_t[48]"
+        }
+      ],
+      "sources": [
+        {
+          "path": "main/dashboard_data_parse.h",
+          "line": 19,
+          "end_line": 23
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "id": "location-ref",
+      "from": "snapshot",
+      "to": "city",
+      "kind": "association",
+      "label": "const pointer"
+    },
+    {
+      "id": "has-schedule",
+      "from": "snapshot",
+      "to": "schedule",
+      "kind": "composition",
+      "label": "energy"
+    },
+    {
+      "id": "has-selection",
+      "from": "snapshot",
+      "to": "selection",
+      "kind": "composition",
+      "label": "energy_selection"
+    },
+    {
+      "id": "has-days",
+      "from": "schedule",
+      "to": "day",
+      "kind": "composition",
+      "label": "today / tomorrow"
+    }
+  ],
+  "cards": [
+    {
+      "title": "Це C structs",
+      "items": [
+        "Record позначає typedef struct, а не C++ class.",
+        "У полях використано короткі назви типів; точні typedef наведені в довіднику."
+      ],
+      "dot": "cyan"
+    },
+    {
+      "title": "Семантика володіння",
+      "items": [
+        "Snapshot посилається на незмінний елемент каталогу міст.",
+        "Графік і selection зберігаються у snapshot за значенням; 48 слотів — 30 хв кожен."
+      ],
+      "dot": "emerald"
+    }
+  ]
+}

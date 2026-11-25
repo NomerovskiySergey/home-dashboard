@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "1c3c6eb7-da3b-44bf-86d7-3d3c34e9c9bb",
+  "status": "current",
+  "command": "deliver",
+  "type": "sequence",
+  "input": "C:\\work\\home-dashboard\\docs\\archify\\location.json",
+  "output": "C:\\work\\home-dashboard\\docs\\archify\\location.html",
+  "specification": {
+    "sha256": "eb53de8d42a724f40bfe54d3d03c2a32e34f7e74ab7f185a8d044be93af7f305",
+    "bytes": 4233
+  },
+  "artifact": {
+    "sha256": "c9c4441b2f4828f63220174bc2170a8917787439e6fc9a1593e0a6256081c98d",
+    "bytes": 927585
+  }
+}

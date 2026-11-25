@@ -56,9 +56,35 @@ static void catalog_tests(void)
     assert(!dashboard_parse_energy_selected(schedule,strlen(schedule),"cek","1.1",&plan));
 }
 
+static void nesting_tests(void)
+{
+    /* Unknown fields must not let a small response recurse through the worker stack. */
+    dashboard_energy_catalog_t cat;
+    dashboard_energy_schedule_t plan;
+    const char *prefix="[{\"slug\":\"kyiv\",\"name\":\"Kyiv\",\"initiator\":\"cek\",\"queue\":\"5.2\","
+        "\"today_date\":\"2026-11-24\",\"today_status\":\"NoShutdowns\","
+        "\"tomorrow_date\":\"2026-11-25\",\"tomorrow_status\":\"NoShutdowns\",\"extra\":";
+    for(unsigned objects=0;objects<2;++objects) for(unsigned depth=1;depth<=96;++depth) {
+        char json[4096]; strcpy(json,prefix);
+        for(unsigned i=0;i<depth;++i) strcat(json,objects ? "{\"x\":" : "[");
+        strcat(json,"0");
+        for(unsigned i=0;i<depth;++i) strcat(json,objects ? "}" : "]");
+        strcat(json,"}]");
+        const bool expected=depth<32; /* The record object is nesting level one. */
+        assert(dashboard_energy_catalog_parse(json,strlen(json),DASH_ENERGY_AREAS,NULL,&cat)==expected);
+        memset(&plan,0x5a,sizeof(plan));
+        dashboard_energy_schedule_t previous=plan;
+        assert(dashboard_parse_energy_selected(json,strlen(json),"cek","5.2",&plan)==expected);
+        if(!expected) assert(!memcmp(&plan,&previous,sizeof(plan)));
+    }
+    const char *quoted="[{\"slug\":\"kyiv\",\"name\":\"[\\\"{\\\"}]\"}]";
+    assert(dashboard_energy_catalog_parse(quoted,strlen(quoted),DASH_ENERGY_AREAS,NULL,&cat));
+}
+
 int main(void)
 {
     catalog_tests();
+    nesting_tests();
     dashboard_energy_selection_t a,b;
     dashboard_energy_load(&a);
     assert(!strcmp(a.area,"dnipropetrovska-oblast") && !strcmp(a.queue,"5.2"));

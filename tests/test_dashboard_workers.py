@@ -8,8 +8,8 @@ from test_dashboard_recovery_source import SDK, ROOT
 
 THREAD_SDK = '#include <windows.h>\n' + SDK.replace(
     '#define portMUX_INITIALIZER_UNLOCKED 0', '#define portMUX_INITIALIZER_UNLOCKED SRWLOCK_INIT'
-).replace('#define portENTER_CRITICAL(x) ((void)(x))', '#define portENTER_CRITICAL(x) AcquireSRWLockExclusive(x)').replace(
-    '#define portEXIT_CRITICAL(x) ((void)(x))', '#define portEXIT_CRITICAL(x) ReleaseSRWLockExclusive(x)'
+).replace('#define portENTER_CRITICAL(x) (++critical_depth)', '#define portENTER_CRITICAL(x) (AcquireSRWLockExclusive(x), ++critical_depth)').replace(
+    '#define portEXIT_CRITICAL(x) (--critical_depth)', '#define portEXIT_CRITICAL(x) (--critical_depth, ReleaseSRWLockExclusive(x))'
 ).replace('typedef int portMUX_TYPE;', 'typedef SRWLOCK portMUX_TYPE;')
 
 FIXTURE = r'''
@@ -33,6 +33,9 @@ static LONG stop, live_clients, requests[3], sntp_inits, sntp_starts;
 static LONG64 offset_us;
 static bool missing_keys, offline, automatic_case;
 static int location_case;
+static bool catalog_case;
+static char catalog_json[8192];
+static HANDLE catalog_inflight,release_catalog;
 static HANDLE release_request;
 static __declspec(thread) int service=-1;
 static SRWLOCK memory_lock=SRWLOCK_INIT;
@@ -63,6 +66,11 @@ esp_err_t esp_http_client_perform(esp_http_client_handle_t handle)
         : client->service==2
         ? "[{\"initiator\":\"dnipropetrovska_oblast_cek\",\"queue\":\"5.2\",\"today_date\":\"2026-11-22\",\"today_status\":\"NoShutdowns\",\"today\":[],\"tomorrow_date\":\"2026-11-23\",\"tomorrow_status\":\"WaitingForSchedule\",\"tomorrow\":[]}]"
         : strstr(client->config.url,"active.json") ? "{\"alerts\":[]}" : "\"NNNNNNNNNNNNNNNNNNNNNNNNNNN\"";
+    if(catalog_case && strstr(client->config.url,"/overview")) {
+        SetEvent(catalog_inflight);
+        assert(WaitForSingleObject(release_catalog,10000)==WAIT_OBJECT_0);
+        body=catalog_json;
+    }
     esp_http_client_event_t event={.event_id=HTTP_EVENT_ON_DATA,.data=(char *)body,
         .data_len=(int)strlen(body),.user_data=client->config.user_data};
     client->config.event_handler(&event);
@@ -73,7 +81,7 @@ esp_err_t esp_http_client_cleanup(esp_http_client_handle_t c)
 { free(c); InterlockedDecrement(&live_clients); return ESP_OK; }
 void *heap_caps_malloc(size_t size,int caps)
 {
-    if (service==oom) return NULL;
+    if (oom>=0 && service==oom) return NULL;
     void *p=malloc(size); assert(p);
     AcquireSRWLockExclusive(&memory_lock);
     assert(allocation_count<16); allocations[allocation_count++]=p;
@@ -129,7 +137,18 @@ int main(int argc,char **argv)
     if(argc>5) offline=atoi(argv[5])!=0;
     if(argc>6) automatic_case=atoi(argv[6])!=0;
     if(argc>7) location_case=atoi(argv[7]);
+    if(argc>8) catalog_case=atoi(argv[8])!=0;
     release_request=CreateEvent(NULL,TRUE,FALSE,NULL);assert(release_request);
+    if(catalog_case) {
+        catalog_inflight=CreateEvent(NULL,TRUE,FALSE,NULL);
+        release_catalog=CreateEvent(NULL,TRUE,FALSE,NULL);
+        strcpy(catalog_json,"[");
+        for(unsigned i=0;i<64;++i) {
+            char row[96];snprintf(row,sizeof(row),"%s{\"slug\":\"area-%u\",\"name\":\"Area %u\"}",i?",":"",i,i);
+            strcat(catalog_json,row);
+        }
+        strcat(catalog_json,"]");
+    }
     const esp_err_t started=dashboard_data_start();
     assert(started==(fail_create?ESP_ERR_NO_MEM:ESP_OK));
     if(!fail_create) {
@@ -179,6 +198,29 @@ int main(int argc,char **argv)
         dashboard_recovery_t r;dashboard_data_recovery(&r);assert(!r.pending&&r.state==DASH_RECOVERY_RUNNING);
     } else {
         wait_fresh(stalled>=0?stalled:oom);
+        if(catalog_case) {
+            dashboard_energy_catalog_t *copy=malloc(sizeof(*copy));assert(copy);
+            for(unsigned round=0;round<10;++round) {
+                ResetEvent(catalog_inflight);ResetEvent(release_catalog);
+                uint32_t stale=dashboard_data_energy_catalog_request(DASH_ENERGY_AREAS,NULL,NULL);assert(stale);
+                assert(WaitForSingleObject(catalog_inflight,3000)==WAIT_OBJECT_0);
+                /* Cancel/free while the worker is in HTTPS, then request A again. */
+                dashboard_data_energy_catalog_cancel();
+                uint32_t generation=dashboard_data_energy_catalog_request(DASH_ENERGY_AREAS,NULL,NULL);
+                dashboard_data_state_t state;
+                assert(generation!=stale && !dashboard_data_energy_catalog_copy(stale,copy,&state));
+                SetEvent(release_catalog);
+                const ULONGLONG deadline=GetTickCount64()+3000;
+                do {
+                    assert(dashboard_data_energy_catalog_copy(generation,copy,&state));
+                    Sleep(1);
+                } while(state!=DASH_DATA_FRESH && GetTickCount64()<deadline);
+                assert(state==DASH_DATA_FRESH && copy->count==64);
+                for(unsigned i=0;i<64;++i) assert(!strncmp(copy->entries[i].id,"area-",5));
+                dashboard_data_energy_catalog_cancel();
+            }
+            free(copy);CloseHandle(catalog_inflight);CloseHandle(release_catalog);
+        }
         if(stalled>=0) {
             dashboard_data_snapshot_t s;dashboard_data_snapshot(&s);
             assert(stalled!=0||!s.weather_updated_us);
@@ -238,7 +280,7 @@ class Workers(unittest.TestCase):
             (path / "sdk_stubs.h").write_text(THREAD_SDK, encoding="utf-8")
             for header in ["esp_err.h", "esp_crt_bundle.h", "esp_http_client.h", "esp_heap_caps.h",
                            "esp_log.h", "esp_netif_sntp.h", "esp_timer.h", "nvs.h", "nvs_flash.h",
-                           "freertos/FreeRTOS.h", "freertos/task.h"]:
+                           "freertos/FreeRTOS.h", "freertos/task.h", "freertos/semphr.h"]:
                 target = path / header
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text('#include "sdk_stubs.h"\n', encoding="utf-8")
@@ -259,7 +301,8 @@ class Workers(unittest.TestCase):
                               [-1, 0, -1, 1, 0], [-1, 0, -1, 0, 1],
                               *[[n, 0, -1, 0, 0, 1] for n in range(3)],
                               [-1,0,-1,0,0,0,1], [0,0,-1,0,0,0,1],
-                              [0,0,-1,0,0,0,2], [-1,0,-1,0,1,0,1]]:
+                              [0,0,-1,0,0,0,2], [-1,0,-1,0,1,0,1],
+                              [-1,0,-1,0,0,0,0,1]]:
                 with self.subTest(arguments=arguments):
                     run = subprocess.run([str(executable), *map(str, arguments)], cwd=path,
                                          capture_output=True, text=True, timeout=15)

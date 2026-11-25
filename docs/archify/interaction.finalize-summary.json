@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "sequence",
+  "quality": "showcase",
+  "specification": {
+    "path": "C:\\work\\home-dashboard\\docs\\archify\\interaction.json",
+    "sha256": "da5608ae34269326cc64c514168c2e722ac76148332e7e9193edfbd476de0c60",
+    "bytes": 3531
+  },
+  "artifact": {
+    "path": "C:\\work\\home-dashboard\\docs\\archify\\interaction.html",
+    "sha256": "d62acddba1333ca70f7ea52e96589f33fa7559768d3d2d126b62c527b350a3bc",
+    "bytes": 924470
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [
+    {
+      "code": "i18n/locale-fallback",
+      "severity": "warning",
+      "message": "meta.locale \"uk\" has no bundled catalog and no usable meta.translations; the Viewer chrome and <html lang> fall back to English.",
+      "subject": {
+        "diagramType": "sequence",
+        "path": "/meta/locale"
+      },
+      "evidence": {
+        "locale": "uk",
+        "bundledLocales": [
+          "en",
+          "zh-CN",
+          "zh-TW",
+          "es",
+          "ko",
+          "ar",
+          "ru"
+        ]
+      },
+      "supportedFixes": [
+        "Supply meta.translations for this locale.",
+        "Use a bundled locale: en, zh-CN, zh-TW, es, ko, ar, ru."
+      ]
+    }
+  ],
+  "diagnosticSummary": {
+    "total": 1,
+    "shown": 1,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "C:\\work\\home-dashboard\\docs\\archify\\interaction.finalize.json",
+    "summaryReceipt": "C:\\work\\home-dashboard\\docs\\archify\\interaction.finalize-summary.json",
+    "browserCheckReceipt": "C:\\work\\home-dashboard\\docs\\archify\\interaction-review-2\\interaction.browser-check.json"
+  },
+  "repositoryReferences": {
+    "status": "verified",
+    "revision": "271ce3279edf3d1160f0a0efc9ea83e19b3943ab",
+    "count": 7
+  },
+  "visualReview": "not-requested",
+  "durationMs": 3669,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  }
+}

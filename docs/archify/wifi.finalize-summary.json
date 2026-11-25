@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "sequence",
+  "quality": "showcase",
+  "specification": {
+    "path": "C:\\work\\home-dashboard\\docs\\archify\\wifi.json",
+    "sha256": "91b2f6b1eec102879a26234b841ab06ff0d9e755b7aa7535e64ae0b5aecdc1c6",
+    "bytes": 3956
+  },
+  "artifact": {
+    "path": "C:\\work\\home-dashboard\\docs\\archify\\wifi.html",
+    "sha256": "2613aecd59f64687192923794085c0670599dffe9268b9335b0ce69074c3577a",
+    "bytes": 926688
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [
+    {
+      "code": "i18n/locale-fallback",
+      "severity": "warning",
+      "message": "meta.locale \"uk\" has no bundled catalog and no usable meta.translations; the Viewer chrome and <html lang> fall back to English.",
+      "subject": {
+        "diagramType": "sequence",
+        "path": "/meta/locale"
+      },
+      "evidence": {
+        "locale": "uk",
+        "bundledLocales": [
+          "en",
+          "zh-CN",
+          "zh-TW",
+          "es",
+          "ko",
+          "ar",
+          "ru"
+        ]
+      },
+      "supportedFixes": [
+        "Supply meta.translations for this locale.",
+        "Use a bundled locale: en, zh-CN, zh-TW, es, ko, ar, ru."
+      ]
+    }
+  ],
+  "diagnosticSummary": {
+    "total": 1,
+    "shown": 1,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "C:\\work\\home-dashboard\\docs\\archify\\wifi.finalize.json",
+    "summaryReceipt": "C:\\work\\home-dashboard\\docs\\archify\\wifi.finalize-summary.json",
+    "browserCheckReceipt": "C:\\work\\home-dashboard\\docs\\archify\\wifi.browser-check.json"
+  },
+  "repositoryReferences": {
+    "status": "verified",
+    "revision": "271ce3279edf3d1160f0a0efc9ea83e19b3943ab",
+    "count": 7
+  },
+  "visualReview": "not-requested",
+  "durationMs": 4625,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  }
+}

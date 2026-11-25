@@ -1,0 +1,320 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Home Dashboard: загальна архітектура",
+    "output": "docs/archify/overview.html",
+    "locale": "uk",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/NomerovskiySergey/home-dashboard.git",
+      "revision": "271ce3279edf3d1160f0a0efc9ea83e19b3943ab"
+    }
+  },
+  "layout": {
+    "mode": "auto"
+  },
+  "components": [
+    {
+      "id": "ui",
+      "type": "frontend",
+      "label": "Екран LVGL",
+      "sublabel": "480 × 480 / дотики",
+      "sources": [
+        {
+          "path": "main/dashboard_screen.c",
+          "line": 1781,
+          "end_line": 1840
+        },
+        {
+          "path": "main/dashboard_screen.c",
+          "line": 1985,
+          "end_line": 1994
+        }
+      ],
+      "drilldowns": [
+        {
+          "label": "Взаємодія задач",
+          "href": "interaction.html"
+        },
+        {
+          "label": "Теми й сон",
+          "href": "display.html"
+        }
+      ]
+    },
+    {
+      "id": "snapshot",
+      "type": "database",
+      "label": "Спільний стан",
+      "sublabel": "RAM / короткий data_lock",
+      "sources": [
+        {
+          "path": "main/dashboard_data.c",
+          "line": 677,
+          "end_line": 714
+        },
+        {
+          "path": "main/dashboard_data.h",
+          "line": 22,
+          "end_line": 39
+        }
+      ],
+      "href": "types.html",
+      "explanation": "UI читає копію latest. Деталі тривог копіюються окремо з перевіркою сумісності. Це стан у RAM, не flash і не база історії."
+    },
+    {
+      "id": "weather",
+      "type": "backend",
+      "label": "Погода",
+      "sublabel": "weather_data / 600 с",
+      "sources": [
+        {
+          "path": "main/dashboard_data.c",
+          "line": 308,
+          "end_line": 343
+        },
+        {
+          "path": "main/dashboard_data.c",
+          "line": 626,
+          "end_line": 649
+        }
+      ],
+      "href": "location.html"
+    },
+    {
+      "id": "alerts",
+      "type": "backend",
+      "label": "Тривоги",
+      "sublabel": "alerts_data / один власник",
+      "sources": [
+        {
+          "path": "main/dashboard_data.c",
+          "line": 346,
+          "end_line": 418
+        },
+        {
+          "path": "main/dashboard_data.c",
+          "line": 654,
+          "end_line": 668
+        }
+      ],
+      "href": "alerts.html"
+    },
+    {
+      "id": "energy",
+      "type": "backend",
+      "label": "Відключення",
+      "sublabel": "energy_data / 300 с",
+      "sources": [
+        {
+          "path": "main/dashboard_data.c",
+          "line": 421,
+          "end_line": 459
+        },
+        {
+          "path": "main/dashboard_data.c",
+          "line": 641,
+          "end_line": 653
+        }
+      ],
+      "href": "energy.html"
+    },
+    {
+      "id": "weather-api",
+      "type": "external",
+      "label": "Open-Meteo",
+      "sublabel": "HTTPS / без ключа",
+      "sources": [
+        {
+          "path": "main/dashboard_location.c",
+          "line": 28,
+          "end_line": 36
+        },
+        {
+          "path": "main/dashboard_data.c",
+          "line": 308,
+          "end_line": 321
+        }
+      ]
+    },
+    {
+      "id": "alerts-api",
+      "type": "external",
+      "label": "Alerts.in.ua",
+      "sublabel": "Карта + active.json",
+      "sources": [
+        {
+          "path": "main/dashboard_data.c",
+          "line": 43,
+          "end_line": 48
+        },
+        {
+          "path": "main/dashboard_data.c",
+          "line": 654,
+          "end_line": 668
+        }
+      ]
+    },
+    {
+      "id": "energy-api",
+      "type": "external",
+      "label": "Alerts.energy",
+      "sublabel": "Каталоги + графік",
+      "sources": [
+        {
+          "path": "main/dashboard_data.c",
+          "line": 421,
+          "end_line": 433
+        },
+        {
+          "path": "main/dashboard_data.c",
+          "line": 513,
+          "end_line": 535
+        }
+      ]
+    },
+    {
+      "id": "supervisor",
+      "type": "backend",
+      "label": "Supervisor",
+      "sublabel": "Heartbeat / SNTP",
+      "sources": [
+        {
+          "path": "main/dashboard_data.c",
+          "line": 149,
+          "end_line": 174
+        }
+      ],
+      "href": "recovery.html"
+    },
+    {
+      "id": "settings",
+      "type": "database",
+      "label": "Налаштування",
+      "sublabel": "NVS / місто та графік",
+      "sources": [
+        {
+          "path": "main/dashboard_data.c",
+          "line": 731,
+          "end_line": 773
+        },
+        {
+          "path": "main/dashboard_location.c",
+          "line": 49,
+          "end_line": 59
+        },
+        {
+          "path": "main/dashboard_energy.c",
+          "line": 72,
+          "end_line": 94
+        }
+      ],
+      "explanation": "UI викликає data_select_location/energy. Реальний NVS-запис виконують location/energy модулі до публікації нового покоління. Wi-Fi та display settings зберігають власні модулі."
+    }
+  ],
+  "connections": [
+    {
+      "id": "weather-weather-api",
+      "from": "weather",
+      "to": "weather-api",
+      "label": "HTTPS",
+      "variant": "default"
+    },
+    {
+      "id": "alerts-alerts-api",
+      "from": "alerts",
+      "to": "alerts-api",
+      "label": "HTTPS",
+      "variant": "default"
+    },
+    {
+      "id": "energy-energy-api",
+      "from": "energy",
+      "to": "energy-api",
+      "label": "HTTPS",
+      "variant": "default"
+    },
+    {
+      "id": "weather-snapshot",
+      "from": "weather",
+      "to": "snapshot",
+      "label": "Температура",
+      "variant": "default"
+    },
+    {
+      "id": "alerts-snapshot",
+      "from": "alerts",
+      "to": "snapshot",
+      "label": "Статуси / типи",
+      "variant": "default"
+    },
+    {
+      "id": "energy-snapshot",
+      "from": "energy",
+      "to": "snapshot",
+      "label": "Графік",
+      "variant": "default"
+    },
+    {
+      "id": "snapshot-ui",
+      "from": "snapshot",
+      "to": "ui",
+      "label": "Копія / 1 с",
+      "variant": "default"
+    },
+    {
+      "id": "ui-settings",
+      "from": "ui",
+      "to": "settings",
+      "label": "Вибір / commit",
+      "variant": "default"
+    },
+    {
+      "id": "settings-snapshot",
+      "from": "settings",
+      "to": "snapshot",
+      "label": "Після commit",
+      "variant": "default"
+    },
+    {
+      "id": "supervisor-weather",
+      "from": "supervisor",
+      "to": "weather",
+      "label": "Recovery",
+      "variant": "default"
+    },
+    {
+      "id": "supervisor-alerts",
+      "from": "supervisor",
+      "to": "alerts",
+      "label": "Recovery",
+      "variant": "default"
+    },
+    {
+      "id": "supervisor-energy",
+      "from": "supervisor",
+      "to": "energy",
+      "label": "Recovery",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "title": "Як працює пристрій",
+      "items": [
+        "Три незалежні задачі отримують HTTPS-дані та публікують перевірений стан.",
+        "LVGL читає копію: мережеві задачі не змінюють UI-об’єкти."
+      ],
+      "dot": "cyan"
+    },
+    {
+      "title": "Окремі сценарії",
+      "items": [
+        "Wi-Fi: дивіться wifi.html; локальна вебформа лише для налаштування мережі.",
+        "Ключі завантажуються через USB; карта й каталог міст вбудовані у firmware."
+      ],
+      "dot": "amber"
+    }
+  ]
+}

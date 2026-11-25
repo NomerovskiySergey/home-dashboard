@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Взаємодія: від HTTP до екрана",
+    "output": "docs/archify/interaction.html",
+    "locale": "uk",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/NomerovskiySergey/home-dashboard.git",
+      "revision": "271ce3279edf3d1160f0a0efc9ea83e19b3943ab"
+    },
+    "parentHref": "overview.html"
+  },
+  "participants": [
+    {
+      "id": "api",
+      "type": "external",
+      "label": "API сервісу",
+      "sublabel": "HTTPS",
+      "sources": [
+        {
+          "path": "main/dashboard_data.c",
+          "line": 219,
+          "end_line": 240
+        }
+      ]
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "Service worker",
+      "sublabel": "Один із трьох",
+      "sources": [
+        {
+          "path": "main/dashboard_data.c",
+          "line": 585,
+          "end_line": 670
+        },
+        {
+          "path": "main/dashboard_data.c",
+          "line": 308,
+          "end_line": 343
+        }
+      ]
+    },
+    {
+      "id": "state",
+      "type": "database",
+      "label": "Стан у RAM",
+      "sublabel": "latest / data_lock",
+      "sources": [
+        {
+          "path": "main/dashboard_data.c",
+          "line": 326,
+          "end_line": 336
+        },
+        {
+          "path": "main/dashboard_data.c",
+          "line": 677,
+          "end_line": 714
+        }
+      ]
+    },
+    {
+      "id": "ui",
+      "type": "frontend",
+      "label": "LVGL UI",
+      "sublabel": "Таймер / 1 с",
+      "sources": [
+        {
+          "path": "main/dashboard_screen.c",
+          "line": 1781,
+          "end_line": 1840
+        },
+        {
+          "path": "main/dashboard_screen.c",
+          "line": 1990,
+          "end_line": 1994
+        }
+      ]
+    }
+  ],
+  "messages": [
+    {
+      "id": "step-1",
+      "from": "worker",
+      "to": "api",
+      "label": "Запит: Wi-Fi, час, backoff дозволяють",
+      "variant": "default",
+      "y": 160
+    },
+    {
+      "id": "step-2",
+      "from": "api",
+      "to": "worker",
+      "label": "HTTP body / status",
+      "variant": "return",
+      "y": 204
+    },
+    {
+      "id": "step-3",
+      "from": "worker",
+      "to": "state",
+      "label": "Публікація перевіреного стану",
+      "variant": "default",
+      "y": 248
+    },
+    {
+      "id": "step-4",
+      "from": "ui",
+      "to": "state",
+      "label": "dashboard_data_snapshot(out)",
+      "variant": "default",
+      "y": 292
+    },
+    {
+      "id": "step-5",
+      "from": "state",
+      "to": "ui",
+      "label": "Копія + оцінка актуальності",
+      "variant": "return",
+      "y": 336
+    }
+  ],
+  "cards": [
+    {
+      "title": "Межа між контекстами",
+      "items": [
+        "Парсинг і HTTP виконуються поза data_lock.",
+        "UI сам читає snapshot; worker не надсилає LVGL-подій.",
+        "Для даних, залежних від вибору, worker також перевіряє generation."
+      ],
+      "dot": "cyan"
+    },
+    {
+      "title": "Два різні годинники",
+      "items": [
+        "UTC/київська дата потрібні календарю та HTTPS.",
+        "Монотонний час потрібен віку даних, дедлайнам і heartbeat."
+      ],
+      "dot": "amber"
+    }
+  ]
+}
