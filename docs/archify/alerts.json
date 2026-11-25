@@ -1,0 +1,221 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Тривоги: карта, кеш і типи загроз",
+    "output": "docs/archify/alerts.html",
+    "locale": "uk",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/NomerovskiySergey/home-dashboard.git",
+      "revision": "271ce3279edf3d1160f0a0efc9ea83e19b3943ab"
+    },
+    "parentHref": "overview.html"
+  },
+  "layout": {
+    "mode": "auto"
+  },
+  "components": [
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "alerts_data",
+      "sublabel": "Один власник / 6 за 60 с",
+      "sources": [
+        {
+          "path": "main/dashboard_data.c",
+          "line": 654,
+          "end_line": 668
+        }
+      ],
+      "explanation": "Обидва endpoint опитуються послідовно. Бюджет і сервісні паузи спільні; дані мають незалежні Last-Modified кеші."
+    },
+    {
+      "id": "map",
+      "type": "external",
+      "label": "Обласна карта",
+      "sublabel": "25 с / Last-Modified",
+      "sources": [
+        {
+          "path": "main/dashboard_data.c",
+          "line": 346,
+          "end_line": 379
+        }
+      ]
+    },
+    {
+      "id": "active",
+      "type": "external",
+      "label": "active.json",
+      "sublabel": "60 с / urgent",
+      "sources": [
+        {
+          "path": "main/dashboard_data.c",
+          "line": 385,
+          "end_line": 418
+        }
+      ]
+    },
+    {
+      "id": "map-state",
+      "type": "database",
+      "label": "Статуси областей",
+      "sublabel": "map_generation",
+      "sources": [
+        {
+          "path": "main/dashboard_data.c",
+          "line": 358,
+          "end_line": 375
+        }
+      ]
+    },
+    {
+      "id": "details",
+      "type": "database",
+      "label": "Записи та маски",
+      "sublabel": "details_generation",
+      "sources": [
+        {
+          "path": "main/dashboard_data.c",
+          "line": 397,
+          "end_line": 415
+        },
+        {
+          "path": "main/dashboard_alert_details.h",
+          "line": 8,
+          "end_line": 27
+        }
+      ]
+    },
+    {
+      "id": "ui",
+      "type": "frontend",
+      "label": "Карта LVGL",
+      "sublabel": "Сумісність / свіжість",
+      "sources": [
+        {
+          "path": "main/dashboard_data.c",
+          "line": 677,
+          "end_line": 714
+        },
+        {
+          "path": "main/dashboard_screen.c",
+          "line": 1796,
+          "end_line": 1823
+        }
+      ]
+    },
+    {
+      "id": "projection",
+      "type": "backend",
+      "label": "Fixed fit",
+      "sublabel": "480 × 327 / без zoom",
+      "sources": [
+        {
+          "path": "main/dashboard_map_view.h",
+          "line": 5,
+          "end_line": 23
+        },
+        {
+          "path": "main/dashboard_screen.c",
+          "line": 1628,
+          "end_line": 1647
+        }
+      ]
+    },
+    {
+      "id": "canvas",
+      "type": "frontend",
+      "label": "Повна карта",
+      "sublabel": "Типи загроз територій",
+      "sources": [
+        {
+          "path": "main/dashboard_screen.c",
+          "line": 1805,
+          "end_line": 1823
+        },
+        {
+          "path": "main/dashboard_screen.c",
+          "line": 1647,
+          "end_line": 1650
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "worker-map",
+      "from": "worker",
+      "to": "map",
+      "label": "HTTPS / кеш",
+      "variant": "default"
+    },
+    {
+      "id": "worker-active",
+      "from": "worker",
+      "to": "active",
+      "label": "HTTPS / кеш",
+      "variant": "default"
+    },
+    {
+      "id": "worker-map-state",
+      "from": "worker",
+      "to": "map-state",
+      "label": "Валідна карта",
+      "variant": "default"
+    },
+    {
+      "id": "worker-details",
+      "from": "worker",
+      "to": "details",
+      "label": "Валідний G",
+      "variant": "default"
+    },
+    {
+      "id": "map-state-ui",
+      "from": "map-state",
+      "to": "ui",
+      "label": "Статуси",
+      "variant": "default"
+    },
+    {
+      "id": "details-ui",
+      "from": "details",
+      "to": "ui",
+      "label": "Сумісні дані",
+      "variant": "default"
+    },
+    {
+      "id": "ui-projection",
+      "from": "ui",
+      "to": "projection",
+      "label": "Рендеринг",
+      "variant": "default"
+    },
+    {
+      "id": "projection-canvas",
+      "from": "projection",
+      "to": "canvas",
+      "label": "Координати",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "title": "Узгодженість",
+      "items": [
+        "Зміна карти: generation++, details stale та urgent-запит у межах бюджету.",
+        "304 підтверджує лише валідний сумісний кеш."
+      ],
+      "dot": "cyan"
+    },
+    {
+      "title": "Значення значків",
+      "items": [
+        "Іконки означають категорії загроз території, не координати повітряних цілей.",
+        "Stale/offline або несумісні details не дають свіжих значків."
+      ],
+      "dot": "amber"
+    }
+  ]
+}

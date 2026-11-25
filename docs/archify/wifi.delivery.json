@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "3cc325c0-6323-4a57-959b-1d480ab42be5",
+  "status": "current",
+  "command": "deliver",
+  "type": "sequence",
+  "input": "C:\\work\\home-dashboard\\docs\\archify\\wifi.json",
+  "output": "C:\\work\\home-dashboard\\docs\\archify\\wifi.html",
+  "specification": {
+    "sha256": "91b2f6b1eec102879a26234b841ab06ff0d9e755b7aa7535e64ae0b5aecdc1c6",
+    "bytes": 3956
+  },
+  "artifact": {
+    "sha256": "2613aecd59f64687192923794085c0670599dffe9268b9335b0ce69074c3577a",
+    "bytes": 926688
+  }
+}

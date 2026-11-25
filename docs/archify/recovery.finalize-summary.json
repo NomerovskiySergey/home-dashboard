@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "lifecycle",
+  "quality": "showcase",
+  "specification": {
+    "path": "C:\\work\\home-dashboard\\docs\\archify\\recovery.json",
+    "sha256": "58fafebeae626b3ca47a473197a2a0dc3d166e6d7f34cadc3d78b5e1dca98754",
+    "bytes": 4067
+  },
+  "artifact": {
+    "path": "C:\\work\\home-dashboard\\docs\\archify\\recovery.html",
+    "sha256": "884bf898dfd2b76065f0c15f436f5aa39fbf2b1c755ece2c133b55a572b46a05",
+    "bytes": 928986
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [
+    {
+      "code": "i18n/locale-fallback",
+      "severity": "warning",
+      "message": "meta.locale \"uk\" has no bundled catalog and no usable meta.translations; the Viewer chrome and <html lang> fall back to English.",
+      "subject": {
+        "diagramType": "lifecycle",
+        "path": "/meta/locale"
+      },
+      "evidence": {
+        "locale": "uk",
+        "bundledLocales": [
+          "en",
+          "zh-CN",
+          "zh-TW",
+          "es",
+          "ko",
+          "ar",
+          "ru"
+        ]
+      },
+      "supportedFixes": [
+        "Supply meta.translations for this locale.",
+        "Use a bundled locale: en, zh-CN, zh-TW, es, ko, ar, ru."
+      ]
+    }
+  ],
+  "diagnosticSummary": {
+    "total": 1,
+    "shown": 1,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "C:\\work\\home-dashboard\\docs\\archify\\recovery.finalize.json",
+    "summaryReceipt": "C:\\work\\home-dashboard\\docs\\archify\\recovery.finalize-summary.json",
+    "browserCheckReceipt": "C:\\work\\home-dashboard\\docs\\archify\\recovery-review-3\\recovery.browser-check.json"
+  },
+  "repositoryReferences": {
+    "status": "verified",
+    "revision": "271ce3279edf3d1160f0a0efc9ea83e19b3943ab",
+    "count": 7
+  },
+  "visualReview": "not-requested",
+  "durationMs": 3980,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  }
+}

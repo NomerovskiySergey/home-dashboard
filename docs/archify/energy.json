@@ -1,0 +1,195 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Відключення: майстер і застосування вибору",
+    "output": "docs/archify/energy.html",
+    "locale": "uk",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/NomerovskiySergey/home-dashboard.git",
+      "revision": "271ce3279edf3d1160f0a0efc9ea83e19b3943ab"
+    },
+    "parentHref": "overview.html"
+  },
+  "participants": [
+    {
+      "id": "ui",
+      "type": "frontend",
+      "label": "Майстер UI",
+      "sublabel": "Окремий draft",
+      "sources": [
+        {
+          "path": "main/dashboard_screen.c",
+          "line": 1125,
+          "end_line": 1149
+        },
+        {
+          "path": "main/dashboard_screen.c",
+          "line": 1152,
+          "end_line": 1186
+        }
+      ]
+    },
+    {
+      "id": "data",
+      "type": "backend",
+      "label": "Data API",
+      "sublabel": "Catalog generation",
+      "sources": [
+        {
+          "path": "main/dashboard_data.c",
+          "line": 462,
+          "end_line": 510
+        },
+        {
+          "path": "main/dashboard_data.c",
+          "line": 756,
+          "end_line": 773
+        }
+      ]
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "energy_data",
+      "sublabel": "Єдиний HTTPS owner",
+      "sources": [
+        {
+          "path": "main/dashboard_data.c",
+          "line": 513,
+          "end_line": 548
+        },
+        {
+          "path": "main/dashboard_data.c",
+          "line": 641,
+          "end_line": 653
+        }
+      ]
+    },
+    {
+      "id": "api",
+      "type": "external",
+      "label": "Alerts.energy",
+      "sublabel": "Каталоги / графіки",
+      "sources": [
+        {
+          "path": "main/dashboard_data.c",
+          "line": 421,
+          "end_line": 433
+        },
+        {
+          "path": "main/dashboard_data.c",
+          "line": 524,
+          "end_line": 535
+        }
+      ]
+    },
+    {
+      "id": "nvs",
+      "type": "database",
+      "label": "NVS selection",
+      "sublabel": "Один JSON / commit",
+      "sources": [
+        {
+          "path": "main/dashboard_energy.c",
+          "line": 72,
+          "end_line": 94
+        }
+      ]
+    }
+  ],
+  "messages": [
+    {
+      "id": "step-1",
+      "from": "ui",
+      "to": "data",
+      "label": "Запросити список / покоління C",
+      "variant": "default",
+      "y": 160
+    },
+    {
+      "id": "step-2",
+      "from": "worker",
+      "to": "api",
+      "label": "Endpoint поточного кроку",
+      "variant": "default",
+      "y": 204
+    },
+    {
+      "id": "step-3",
+      "from": "worker",
+      "to": "data",
+      "label": "Каталог: лише якщо C ще поточне",
+      "variant": "default",
+      "y": 248
+    },
+    {
+      "id": "step-4",
+      "from": "ui",
+      "to": "data",
+      "label": "copy(C): UI timer 500 мс",
+      "variant": "default",
+      "y": 292
+    },
+    {
+      "id": "step-5",
+      "from": "ui",
+      "to": "data",
+      "label": "Вибір черги → select_energy(draft)",
+      "variant": "default",
+      "y": 336
+    },
+    {
+      "id": "step-6",
+      "from": "data",
+      "to": "nvs",
+      "label": "Зберегти всю трійку / commit",
+      "variant": "default",
+      "y": 380
+    },
+    {
+      "id": "step-7",
+      "from": "nvs",
+      "to": "data",
+      "label": "ESP_OK → energy_generation++",
+      "variant": "return",
+      "y": 424
+    },
+    {
+      "id": "step-8",
+      "from": "worker",
+      "to": "api",
+      "label": "Графік нового area / initiator / queue",
+      "variant": "default",
+      "y": 468
+    },
+    {
+      "id": "step-9",
+      "from": "worker",
+      "to": "data",
+      "label": "Парсинг / публікація лише поточного G",
+      "variant": "default",
+      "y": 512
+    }
+  ],
+  "cards": [
+    {
+      "title": "Коли вибір набирає чинності",
+      "items": [
+        "Область і оператор змінюють draft; лише вибір черги зберігає всю трійку.",
+        "При NVS-помилці попереднє налаштування залишається.",
+        "Запит і copy повторюються для areas → suppliers → shutdowns після вибору кожного кроку."
+      ],
+      "dot": "cyan"
+    },
+    {
+      "title": "Ресурси і межі",
+      "items": [
+        "До 64 записів у каталозі, до 8 reusable UI-рядків.",
+        "Черги отримують із наявних графіків; це не гарантовано повний довідник."
+      ],
+      "dot": "amber"
+    }
+  ]
+}

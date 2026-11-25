@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "a12683d7-d9d3-4030-becc-142df681ee35",
+  "status": "current",
+  "command": "deliver",
+  "type": "class",
+  "input": "C:\\work\\home-dashboard\\docs\\archify\\types.json",
+  "output": "C:\\work\\home-dashboard\\docs\\archify\\types.html",
+  "specification": {
+    "sha256": "c09762eb3944179e859daf8508b7455a5f485e3539b9931decc0d7db7d9858f8",
+    "bytes": 4857
+  },
+  "artifact": {
+    "sha256": "818bbf03aa25ca9d8b8a056d8d9268f5352b9dfbd1b83fb8c76c01b877ec9ba0",
+    "bytes": 936613
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "2bbb1d9c-da70-48e1-95f1-549b6e73db63",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "C:\\work\\home-dashboard\\docs\\archify\\alerts.json",
+  "output": "C:\\work\\home-dashboard\\docs\\archify\\alerts.html",
+  "specification": {
+    "sha256": "8a960a89f3d6d23c464879cc65a772e9576477baaf2caa2e586b23625700d12f",
+    "bytes": 5409
+  },
+  "artifact": {
+    "sha256": "9cea650d3febbc1e379597588581c882b1f34be9ccf8b36c7f61240091db6505",
+    "bytes": 946300
+  }
+}

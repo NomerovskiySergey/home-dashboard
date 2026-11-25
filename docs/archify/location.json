@@ -1,0 +1,181 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Локація і погода: збереження та покоління",
+    "output": "docs/archify/location.html",
+    "locale": "uk",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/NomerovskiySergey/home-dashboard.git",
+      "revision": "271ce3279edf3d1160f0a0efc9ea83e19b3943ab"
+    },
+    "parentHref": "overview.html"
+  },
+  "participants": [
+    {
+      "id": "ui",
+      "type": "frontend",
+      "label": "LVGL UI",
+      "sublabel": "Вибір міста",
+      "sources": [
+        {
+          "path": "main/dashboard_screen.c",
+          "line": 1781,
+          "end_line": 1796
+        },
+        {
+          "path": "main/dashboard_data.c",
+          "line": 731,
+          "end_line": 753
+        }
+      ]
+    },
+    {
+      "id": "state",
+      "type": "backend",
+      "label": "Data API",
+      "sublabel": "Вибір / generation",
+      "sources": [
+        {
+          "path": "main/dashboard_data.c",
+          "line": 731,
+          "end_line": 753
+        },
+        {
+          "path": "main/dashboard_data.c",
+          "line": 308,
+          "end_line": 336
+        }
+      ]
+    },
+    {
+      "id": "nvs",
+      "type": "database",
+      "label": "NVS",
+      "sublabel": "dash_location/city",
+      "sources": [
+        {
+          "path": "main/dashboard_location.c",
+          "line": 49,
+          "end_line": 59
+        }
+      ]
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "weather_data",
+      "sublabel": "Розклад погоди",
+      "sources": [
+        {
+          "path": "main/dashboard_data.c",
+          "line": 626,
+          "end_line": 649
+        },
+        {
+          "path": "main/dashboard_data.c",
+          "line": 308,
+          "end_line": 343
+        }
+      ]
+    },
+    {
+      "id": "api",
+      "type": "external",
+      "label": "Open-Meteo",
+      "sublabel": "Координати міста",
+      "sources": [
+        {
+          "path": "main/dashboard_location.c",
+          "line": 28,
+          "end_line": 36
+        }
+      ]
+    }
+  ],
+  "messages": [
+    {
+      "id": "step-1",
+      "from": "ui",
+      "to": "state",
+      "label": "select_location(city)",
+      "variant": "default",
+      "y": 160
+    },
+    {
+      "id": "step-2",
+      "from": "state",
+      "to": "nvs",
+      "label": "Зберегти ID / commit",
+      "variant": "default",
+      "y": 204
+    },
+    {
+      "id": "step-3",
+      "from": "nvs",
+      "to": "state",
+      "label": "ESP_OK → generation++",
+      "variant": "return",
+      "y": 248
+    },
+    {
+      "id": "step-4",
+      "from": "worker",
+      "to": "state",
+      "label": "Зчитати місто та покоління G",
+      "variant": "default",
+      "y": 292
+    },
+    {
+      "id": "step-5",
+      "from": "worker",
+      "to": "api",
+      "label": "HTTPS: latitude / longitude",
+      "variant": "default",
+      "y": 336
+    },
+    {
+      "id": "step-6",
+      "from": "api",
+      "to": "worker",
+      "label": "Температура у °C",
+      "variant": "return",
+      "y": 380
+    },
+    {
+      "id": "step-7",
+      "from": "worker",
+      "to": "state",
+      "label": "Публікувати лише для поточного G",
+      "variant": "default",
+      "y": 424
+    },
+    {
+      "id": "step-8",
+      "from": "ui",
+      "to": "state",
+      "label": "Читати новий snapshot",
+      "variant": "default",
+      "y": 468
+    }
+  ],
+  "cards": [
+    {
+      "title": "Чому generation",
+      "items": [
+        "A → B → A змінює покоління двічі.",
+        "Стара відповідь A відкидається, навіть коли місто знову A."
+      ],
+      "dot": "cyan"
+    },
+    {
+      "title": "Незалежні налаштування",
+      "items": [
+        "Помилка NVS залишає застосоване місто незмінним.",
+        "Alerts worker оновлює локальні details; вибір відключень не змінюється."
+      ],
+      "dot": "emerald"
+    }
+  ]
+}

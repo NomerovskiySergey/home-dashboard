@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "ad83b4c6-5719-4bc6-936e-1aa2e474535f",
+  "status": "current",
+  "command": "deliver",
+  "type": "lifecycle",
+  "input": "C:\\work\\home-dashboard\\docs\\archify\\recovery.json",
+  "output": "C:\\work\\home-dashboard\\docs\\archify\\recovery.html",
+  "specification": {
+    "sha256": "58fafebeae626b3ca47a473197a2a0dc3d166e6d7f34cadc3d78b5e1dca98754",
+    "bytes": 4067
+  },
+  "artifact": {
+    "sha256": "884bf898dfd2b76065f0c15f436f5aa39fbf2b1c755ece2c133b55a572b46a05",
+    "bytes": 928986
+  }
+}

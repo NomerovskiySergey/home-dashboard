@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "08f1dbfc-2e71-4d84-9800-5be15192b12c",
+  "status": "current",
+  "command": "deliver",
+  "type": "sequence",
+  "input": "C:\\work\\home-dashboard\\docs\\archify\\interaction.json",
+  "output": "C:\\work\\home-dashboard\\docs\\archify\\interaction.html",
+  "specification": {
+    "sha256": "da5608ae34269326cc64c514168c2e722ac76148332e7e9193edfbd476de0c60",
+    "bytes": 3531
+  },
+  "artifact": {
+    "sha256": "d62acddba1333ca70f7ea52e96589f33fa7559768d3d2d126b62c527b350a3bc",
+    "bytes": 924470
+  }
+}

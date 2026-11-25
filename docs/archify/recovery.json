@@ -1,0 +1,153 @@
+{
+  "schema_version": 3,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Відновлення окремого service worker",
+    "output": "docs/archify/recovery.html",
+    "locale": "uk",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/NomerovskiySergey/home-dashboard.git",
+      "revision": "271ce3279edf3d1160f0a0efc9ea83e19b3943ab"
+    },
+    "parentHref": "overview.html"
+  },
+  "mainPath": [
+    "running",
+    "requested",
+    "restarting"
+  ],
+  "states": [
+    {
+      "id": "running",
+      "type": "start",
+      "label": "RUNNING",
+      "sublabel": "Heartbeat оновлюється",
+      "sources": [
+        {
+          "path": "main/dashboard_recovery.c",
+          "line": 3,
+          "end_line": 23
+        },
+        {
+          "path": "main/dashboard_recovery.c",
+          "line": 41,
+          "end_line": 47
+        }
+      ]
+    },
+    {
+      "id": "requested",
+      "type": "waiting",
+      "label": "REQUESTED",
+      "sublabel": "pending / automatic",
+      "sources": [
+        {
+          "path": "main/dashboard_recovery.c",
+          "line": 8,
+          "end_line": 17
+        },
+        {
+          "path": "main/dashboard_recovery.c",
+          "line": 25,
+          "end_line": 32
+        }
+      ]
+    },
+    {
+      "id": "restarting",
+      "type": "active",
+      "label": "RESTARTING",
+      "sublabel": "Worker робить cleanup",
+      "sources": [
+        {
+          "path": "main/dashboard_recovery.c",
+          "line": 35,
+          "end_line": 47
+        },
+        {
+          "path": "main/dashboard_data.c",
+          "line": 599,
+          "end_line": 615
+        }
+      ]
+    },
+    {
+      "id": "failed",
+      "type": "failure",
+      "label": "FAILED",
+      "sublabel": "pending лишається true",
+      "sources": [
+        {
+          "path": "main/dashboard_recovery.c",
+          "line": 25,
+          "end_line": 32
+        }
+      ],
+      "explanation": "FAILED означає відсутність завершення у grace period. pending не скидається, тому повторне натискання не створює новий запит. Якщо worker повернувся, він може завершити попереднє відновлення."
+    }
+  ],
+  "transitions": [
+    {
+      "id": "request",
+      "from": "running",
+      "to": "requested",
+      "label": "Кнопка або stall 45 с"
+    },
+    {
+      "id": "begin",
+      "from": "requested",
+      "to": "restarting",
+      "label": "Worker помітив pending"
+    },
+    {
+      "id": "finish",
+      "from": "restarting",
+      "to": "running",
+      "label": "finish / cooldown 5 с"
+    },
+    {
+      "id": "timeout-request",
+      "from": "requested",
+      "to": "failed",
+      "label": "15 с"
+    },
+    {
+      "id": "timeout-restart",
+      "from": "restarting",
+      "to": "failed",
+      "label": "15 с"
+    },
+    {
+      "id": "late-begin",
+      "from": "failed",
+      "to": "restarting",
+      "label": "Worker повернувся"
+    },
+    {
+      "id": "late-finish",
+      "from": "failed",
+      "to": "running",
+      "label": "Пізній finish"
+    }
+  ],
+  "cards": [
+    {
+      "title": "Цикл задачі, не reboot",
+      "items": [
+        "Worker закриває власний HTTP client і перевиділяє власні буфери.",
+        "Кеш та сервісні паузи зберігаються; інші workers працюють.",
+        "REQUESTED/RESTARTING → FAILED: 15 с від requested_us, не від початку cleanup."
+      ],
+      "dot": "cyan"
+    },
+    {
+      "title": "Група та межі",
+      "items": [
+        "Кнопка запитує всю групу, summary чекає всіх підтверджень.",
+        "Автоматичного повного reboot немає; SDK може завадити кооперативному скасуванню."
+      ],
+      "dot": "amber"
+    }
+  ]
+}
